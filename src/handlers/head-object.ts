@@ -118,7 +118,7 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
     headers['Content-Length'] = partSize.toString();
     headers['Content-Range'] = `bytes ${start}-${end}/${obj.size}`;
     headers['x-amz-mp-parts-count'] = partSizes.length.toString();
-    return new Response(null, { status: 206, headers });
+    return new Response(null, { status: 200, headers });
   }
 
   return new Response(null, { status: 200, headers });

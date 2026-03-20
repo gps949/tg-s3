@@ -430,7 +430,7 @@ async function handleImageVariant(
   } catch {
     const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
     return new Response(tgRes.body, {
-      headers: { 'Content-Type': obj.content_type, 'Cache-Control': 'public, max-age=86400' },
+      headers: { 'Content-Type': obj.content_type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' },
     });
   }
 

@@ -444,11 +444,11 @@ GET /{bucket}/{key}?w=200&fmt=webp → 组合
 
 处理流程:
   1. 检查 Content-Type 是否为图片（isImageContentType）
-  2. 生成变体 key: `{key}._derivatives/w{width}_${format || 'original'}`
+  2. 生成变体 key: `{key}._derivatives/w${width || 'orig'}_${format || 'original'}`
   3. 查 D1 是否已有缓存的变体 → 有则直接返回
   4. 无 VPS: 回退返回原图（Cache-Control: no-store，防止缓存污染）
   5. 有 VPS: 调用 GET /api/image/resize?tg_file_id=...&width=...&format=...
-  6. VPS 处理失败: 回退返回原图
+  6. VPS 处理失败: 回退返回原图（Cache-Control: no-store，防止 CDN 将原图缓存为变体）
   7. 成功: 异步将变体存回 TG + D1（derived_from 关联原始文件），直接返回变体
 ```
 
