@@ -105,14 +105,16 @@ export async function deleteChunks(bucket: string, key: string, env: Env, store:
 }
 
 export async function deleteDerivatives(bucket: string, key: string, env: Env, store: MetadataStore): Promise<void> {
-  // Use derived_from index for efficient lookup instead of prefix scan
-  const derivatives = await store.getObjectsByDerivedFrom(bucket, key);
-  if (derivatives.length === 0) return;
-  const tg = new TelegramClient(env);
-  await Promise.allSettled(derivatives.map(async (obj) => {
-    const deleted = await store.deleteObject(bucket, obj.key);
-    if (deleted) {
-      await tg.deleteMessage(deleted.tg_chat_id, deleted.tg_message_id);
-    }
-  }));
+  try {
+    // Use derived_from index for efficient lookup instead of prefix scan
+    const derivatives = await store.getObjectsByDerivedFrom(bucket, key);
+    if (derivatives.length === 0) return;
+    const tg = new TelegramClient(env);
+    await Promise.allSettled(derivatives.map(async (obj) => {
+      const deleted = await store.deleteObject(bucket, obj.key);
+      if (deleted) {
+        await tg.deleteMessage(deleted.tg_chat_id, deleted.tg_message_id).catch(e => console.error(`deleteDerivatives: deleteMessage(${deleted.tg_chat_id}, ${deleted.tg_message_id}) failed:`, e));
+      }
+    }));
+  } catch (e) { console.error(`deleteDerivatives(${bucket}, ${key}) failed:`, e); }
 }

@@ -330,7 +330,7 @@ async function loadBuckets() {
 
 function showCreateBucket() {
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('new_bucket_title'))}</h3>
     <div class="form-group">
       <label>\${esc(t('bucket_name_label'))}</label>
@@ -668,7 +668,7 @@ async function batchDelete() {
   const moreHtml = keys.length > 10 ? '<div style="font-size:12px;color:var(--hint)">' + esc(t('more_files', keys.length - 10)) + '</div>' : '';
   const sizeHtml = totalSize > 0 ? '<div style="font-size:12px;color:var(--hint);margin-top:4px">' + esc(t('total_label', formatSize(totalSize))) + '</div>' : '';
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('batch_delete_title'))}</h3>
     <p style="margin:8px 0">\${esc(t('batch_delete_msg', keys.length))}</p>
     <div style="max-height:150px;overflow-y:auto;margin:8px 0;padding:8px;background:var(--bg);border-radius:8px">\${fileListHtml}\${moreHtml}\${sizeHtml}</div>
@@ -725,7 +725,7 @@ async function batchShare() {
   if (selectedFiles.size === 0) { toast(t('select_files_first')); return; }
   const keys = [...selectedFiles];
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('batch_share_title', keys.length))}</h3>
     <div class="form-group">
       <label>\${esc(t('expiry_label'))}</label>
@@ -774,7 +774,7 @@ async function doBatchShare() {
 
   const ok = results.filter(r => r.ok);
   const fail = results.filter(r => !r.ok);
-  let html = '<span class="modal-close" onclick="closeModal()">&times;</span><h3>' + esc(t('batch_share_result')) + '</h3>';
+  let html = '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span><h3>' + esc(t('batch_share_result')) + '</h3>';
   if (ok.length > 0) {
     html += '<div class="form-group"><label>' + esc(t('success_count', ok.length, results.length)) + '</label>';
     const allUrls = ok.map(r => r.url).join('\\n');
@@ -949,7 +949,7 @@ async function showFileDetail(bucket, key) {
     }
 
     showModal(\`
-      <span class="modal-close" onclick="closeModal()">&times;</span>
+      <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
       <h3>\${esc(name)}</h3>
       \${previewHtml}
       <div class="form-group">
@@ -1053,7 +1053,7 @@ async function copyPresignUrl(bucket, key) {
 function showRenameForm(bucket, key) {
   const name = key.split('/').pop() || key;
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('rename_move'))}</h3>
     <div class="form-group">
       <label>\${esc(t('current_path'))}</label>
@@ -1089,7 +1089,7 @@ async function doRename(bucket, oldKey) {
 function confirmDelete(bucket, key) {
   const name = key.split('/').pop() || key;
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('confirm_delete'))}</h3>
     <p style="margin:12px 0">\${esc(t('confirm_delete_msg', name))}</p>
     <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -1117,7 +1117,7 @@ async function doDelete(bucket, key) {
 function showShareForm(bucket, key) {
   const name = key.split('/').pop() || key;
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('share_file', name))}</h3>
     <div class="form-group">
       <label>\${esc(t('expiry_label'))}</label>
@@ -1152,7 +1152,7 @@ async function doShare(bucket, key) {
       body: JSON.stringify({ bucket, key, expiresIn, password, maxDownloads }),
     });
     showModal(\`
-      <span class="modal-close" onclick="closeModal()">&times;</span>
+      <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
       <h3>\${esc(t('share_created'))}</h3>
       <div class="form-group">
         <label>\${esc(t('share_link'))}</label>
@@ -1211,7 +1211,7 @@ async function loadShares() {
 
 async function revokeShare(token) {
   showModal(\`
-    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>
     <h3>\${esc(t('revoke_share'))}</h3>
     <p style="margin:8px 0">\${esc(t('revoke_confirm'))}</p>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
@@ -1446,7 +1446,7 @@ async function loadKeys() {
 
 function showCreateKey() {
   showModal(
-    '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+    '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>' +
     '<h3>' + esc(t('key_create_title')) + '</h3>' +
     '<div class="form-group">' +
       '<label>' + esc(t('key_name_label')) + '</label>' +
@@ -1455,9 +1455,9 @@ function showCreateKey() {
     '<div class="form-group">' +
       '<label>' + esc(t('key_permission_label')) + '</label>' +
       '<select id="keyPermission">' +
-        '<option value="admin">admin</option>' +
-        '<option value="readwrite" selected>readwrite</option>' +
-        '<option value="readonly">readonly</option>' +
+        '<option value="admin">' + esc(t('key_perm_admin')) + '</option>' +
+        '<option value="readwrite" selected>' + esc(t('key_perm_readwrite')) + '</option>' +
+        '<option value="readonly">' + esc(t('key_perm_readonly')) + '</option>' +
       '</select>' +
     '</div>' +
     '<div class="form-group">' +
@@ -1482,14 +1482,14 @@ async function doCreateKey() {
       body: JSON.stringify({ name: name, permission: permission, buckets: buckets }),
     });
     showModal(
-      '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+      '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>' +
       '<h3>' + esc(t('key_created_title')) + '</h3>' +
       '<div class="form-group">' +
-        '<label>Access Key ID</label>' +
+        '<label>' + esc(t('key_akid_label')) + '</label>' +
         '<div class="secret-reveal">' + esc(result.access_key_id) + '</div>' +
       '</div>' +
       '<div class="form-group">' +
-        '<label>Secret Access Key</label>' +
+        '<label>' + esc(t('key_sk_label')) + '</label>' +
         '<div class="secret-reveal">' + esc(result.secret_access_key) + '</div>' +
       '</div>' +
       '<div class="secret-warning">' + esc(t('key_secret_warning')) + '</div>' +
@@ -1519,7 +1519,7 @@ async function toggleKeyStatus(accessKeyId, newStatus) {
 
 function confirmDeleteKey(accessKeyId, name) {
   showModal(
-    '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+    '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>' +
     '<h3>' + esc(t('key_delete_title')) + '</h3>' +
     '<p style="margin:12px 0">' + esc(t('key_delete_confirm', name)) + '</p>' +
     '<div style="display:flex;gap:8px;justify-content:flex-end">' +

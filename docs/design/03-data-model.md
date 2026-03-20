@@ -176,6 +176,25 @@ CREATE TABLE user_preferences (
 
 目前用于存储 `/setbucket` 设置的默认上传 Bucket。
 
+### credentials 表（S3 API 凭证）
+
+```sql
+CREATE TABLE credentials (
+    access_key_id       TEXT    PRIMARY KEY,
+    secret_access_key   TEXT    NOT NULL,
+    name                TEXT    NOT NULL DEFAULT '',     -- 凭证名称（便于管理）
+    buckets             TEXT    NOT NULL DEFAULT '*',    -- '*' 或逗号分隔的 Bucket 名
+    permission          TEXT    NOT NULL DEFAULT 'admin', -- 'admin' | 'readwrite' | 'readonly'
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_used_at        TEXT,                            -- 概率更新（10%），减少 D1 写入
+    is_active           INTEGER NOT NULL DEFAULT 1       -- 0=停用, 1=启用
+);
+```
+
+SigV4 认证流程中，通过 Access Key ID 查询对应的 Secret Access Key 进行签名验证。
+凭证带 60s 内存缓存，PATCH/DELETE 操作时主动失效缓存。
+权限级别：`admin`（全部操作）、`readwrite`（读写，不含凭证管理和 Bucket 删除）、`readonly`（只读）。
+
 ## 速率限制设计
 
 ### TG API 限制回顾
