@@ -37,7 +37,7 @@ Docker 部署需要在 [Cloudflare API Tokens](https://dash.cloudflare.com/profi
 
 ```bash
 # 克隆并配置
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 ```

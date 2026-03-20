@@ -56,7 +56,7 @@ Mini App ───────┤         │                R2 (缓存)
 ### 方式一：Docker（推荐）
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # 编辑 .env 填入你的凭据
@@ -68,7 +68,7 @@ docker compose up -d
 ### 方式二：手动部署
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env

@@ -56,7 +56,7 @@ Share Links ────┘         ▼
 ### Option 1: Docker (recommended)
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # Edit .env with your credentials
@@ -68,7 +68,7 @@ The `deploy` service pushes the Worker to Cloudflare and exits. The `processor` 
 ### Option 2: Manual deployment
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env

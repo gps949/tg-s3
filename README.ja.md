@@ -56,7 +56,7 @@ Mini App ─────────┤         │                R2 (キャッ
 ### 方法 1: Docker（推奨）
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # .env にクレデンシャルを入力
@@ -68,7 +68,7 @@ docker compose up -d
 ### 方法 2: 手動デプロイ
 
 ```bash
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env

@@ -37,7 +37,7 @@ Best for VPS deployment. One command handles everything.
 
 ```bash
 # Clone and configure
-git clone https://github.com/pocketclouds/tg-s3.git
+git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 ```
