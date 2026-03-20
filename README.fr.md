@@ -42,7 +42,7 @@ Liens partage ──┘         ▼
 |-----------|------|------|
 | CF Worker | Passerelle API S3, webhook Bot, hote Mini App | Plan gratuit |
 | CF D1 | Stockage metadonnees (objets, buckets, partages) | Plan gratuit |
-| CF R2 | Cache persistant, fichiers <=25 Mo | Plan gratuit (10 Go) |
+| CF R2 | Cache persistant, fichiers <=20 Mo | Plan gratuit (10 Go) |
 | Telegram | Stockage persistant de fichiers (illimite) | Gratuit |
 | VPS + Processor | Gros fichiers (>20 Mo), traitement media | ~4 $/mois (optionnel) |
 
