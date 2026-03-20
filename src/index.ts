@@ -1,0 +1,557 @@
+import type { Env, S3Request, S3Operation, AuthFailure } from './types';
+import { parseS3Path } from './utils/path';
+import { verifyBearer } from './auth/bearer';
+import { verifySignature } from './auth/sigv4';
+import { generatePresignedUrl } from './auth/presigned';
+import { errorResponse } from './xml/builder';
+import { timingSafeEqual } from './utils/crypto';
+
+// Handlers
+import { handleGetObject } from './handlers/get-object';
+import { handlePutObject } from './handlers/put-object';
+import { handleHeadObject } from './handlers/head-object';
+import { handleDeleteObject, handleDeleteObjects, cleanupDeletedObject } from './handlers/delete-object';
+import { handleListObjectsV2, handleListObjects } from './handlers/list-objects';
+import { handleCopyObject } from './handlers/copy-object';
+import { handleCreateMultipartUpload, handleUploadPart, handleUploadPartCopy, handleCompleteMultipartUpload, handleAbortMultipartUpload, handleListParts, handleListMultipartUploads } from './handlers/multipart';
+import { handleListBuckets, handleCreateBucket, handleDeleteBucket, handleHeadBucket, handleGetBucketLocation, handleGetBucketVersioning } from './handlers/bucket';
+import { handleShareApi, handleShareAccess } from './handlers/share';
+import { handleWebhook } from './bot/webhook';
+import { MetadataStore } from './storage/metadata';
+import { TelegramClient } from './telegram/client';
+import { cleanR2Cache } from './handlers/get-object';
+import { renderMiniApp } from './bot/miniapp';
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return handleCors();
+    }
+
+    // Bot webhook (verified by secret_token header)
+    if (path === '/bot/webhook' && request.method === 'POST') {
+      const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
+      if (!timingSafeEqual(secret, env.BEARER_TOKEN)) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      return handleWebhook(request, env);
+    }
+
+    // Mini App (served as HTML, auth via Telegram WebApp initData)
+    if (path === '/miniapp' || path === '/miniapp/') {
+      return new Response(renderMiniApp(url.origin), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    }
+
+    // Share access (public, no auth required)
+    if (path.startsWith('/share/')) {
+      return addCorsHeaders(await handleShareAccess(request, url, env));
+    }
+
+    // Presigned URL generation API (requires auth)
+    if (path === '/api/presign' && request.method === 'POST') {
+      const authErr = await authenticate(request, url, env);
+      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      return addCorsHeaders(await handlePresignApi(request, url, env));
+    }
+
+    // Share management API (requires auth)
+    if (path.startsWith('/api/shares')) {
+      const authErr = await authenticate(request, url, env);
+      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      return addCorsHeaders(await handleShareApi(request, url, env));
+    }
+
+    // Mini App API (requires auth)
+    if (path.startsWith('/api/miniapp/')) {
+      const authErr = await authenticate(request, url, env);
+      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      return addCorsHeaders(await handleMiniAppApi(request, url, env, ctx));
+    }
+
+    // S3 API
+    try {
+      // Authenticate (returns specific S3 error codes)
+      const authErr = await authenticate(request, url, env);
+      if (authErr) {
+        return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      }
+
+      const { bucket, key } = parseS3Path(url);
+      const s3: S3Request = {
+        method: request.method,
+        bucket,
+        key,
+        query: url.searchParams,
+        headers: request.headers,
+        body: request.body,
+        url,
+      };
+
+      const operation = routeS3Request(s3);
+      if (!operation) {
+        // S3 returns 405 MethodNotAllowed for unsupported HTTP methods
+        const supportedMethods = ['GET', 'HEAD', 'PUT', 'DELETE', 'POST'];
+        if (!supportedMethods.includes(request.method)) {
+          return addCorsHeaders(errorResponse(405, 'MethodNotAllowed', 'The specified method is not allowed against this resource.'));
+        }
+        // Return 501 for known S3 sub-resource operations we don't support
+        const subresource = hasUnsupportedSubresource(s3.query);
+        if (subresource) {
+          return addCorsHeaders(errorResponse(501, 'NotImplemented', `The ${subresource} sub-resource is not supported.`));
+        }
+        return addCorsHeaders(errorResponse(400, 'InvalidRequest', 'Could not determine S3 operation.'));
+      }
+
+      // S3 limits key length to 1024 bytes (UTF-8 encoded); validate on write operations
+      const WRITE_OPS: S3Operation[] = ['PutObject', 'CopyObject', 'CreateMultipartUpload', 'UploadPartCopy'];
+      if (key && WRITE_OPS.includes(operation) && new TextEncoder().encode(key).length > 1024) {
+        return addCorsHeaders(errorResponse(400, 'KeyTooLongError', 'Your key is too long.'));
+      }
+
+      let response = await dispatchS3(operation, s3, env, ctx);
+      // HEAD responses must not have a body per HTTP spec
+      if (request.method === 'HEAD' && response.body) {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+      return addCorsHeaders(response);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      const errRes = errorResponse(500, 'InternalError', msg);
+      if (request.method === 'HEAD') {
+        return addCorsHeaders(new Response(null, { status: errRes.status, headers: errRes.headers }));
+      }
+      return addCorsHeaders(errRes);
+    }
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const store = new MetadataStore(env);
+
+    if (!env.WORKER_URL) {
+      console.warn('Cron: WORKER_URL not set, CDN cache purge during consistency cleanup will be skipped.');
+    }
+
+    // Each task is independently try-caught so a failure in one doesn't block the rest
+
+    let expiredShares = 0;
+    try {
+      expiredShares = await store.cleanExpiredShares();
+    } catch (e) { console.error('Cron: cleanExpiredShares failed:', e); }
+
+    let orphanedShares = 0;
+    try {
+      orphanedShares = await store.cleanOrphanedShares();
+    } catch (e) { console.error('Cron: cleanOrphanedShares failed:', e); }
+
+    let staleUploads = 0;
+    try {
+      const staleResult = await store.cleanStaleMultiparts(24);
+      staleUploads = staleResult.count;
+      if (staleResult.parts.length > 0) {
+        const tgCleanup = new TelegramClient(env);
+        await Promise.allSettled(staleResult.parts.map(part =>
+          tgCleanup.deleteMessage(part.tg_chat_id, part.tg_message_id).catch(() => {})
+        ));
+      }
+    } catch (e) { console.error('Cron: cleanStaleMultiparts failed:', e); }
+
+    let inconsistent = 0;
+    try {
+      const { TgApiError } = await import('./telegram/client');
+      const tg = new TelegramClient(env);
+      // Dynamic sampling: 2% of objects, clamped to [5, 50]
+      const totalCount = await store.countObjects();
+      const sampleSize = Math.min(50, Math.max(5, Math.ceil(totalCount * 0.02)));
+      const samples = await store.sampleObjects(sampleSize);
+      for (const obj of samples) {
+        try {
+          await tg.getFile(obj.tg_file_id);
+        } catch (e) {
+          // Only delete if TG explicitly says the file is invalid (400 Bad Request).
+          // Transient errors (timeout, network, FloodWait, 5xx) should NOT trigger deletion.
+          if (e instanceof TgApiError && e.status === 400) {
+            inconsistent++;
+            await store.deleteObject(obj.bucket, obj.key);
+            // Full cleanup: TG message, derivatives, share tokens, CDN/R2 cache
+            const cronBaseUrl = env.WORKER_URL
+              ? (env.WORKER_URL.startsWith('http') ? env.WORKER_URL : `https://${env.WORKER_URL}`)
+              : '';
+            await cleanupDeletedObject(obj.bucket, obj.key, obj, cronBaseUrl, env, store);
+            console.log(`Consistency: removed orphaned D1 record ${obj.bucket}/${obj.key}`);
+          } else {
+            console.warn(`Consistency: skipped ${obj.bucket}/${obj.key} due to transient error: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+      }
+    } catch (e) { console.error('Cron: D1-TG consistency check failed:', e); }
+
+    let r2Cleaned = 0;
+    try {
+      r2Cleaned = await cleanR2Cache(env, store, 20);
+    } catch (e) { console.error('Cron: cleanR2Cache failed:', e); }
+
+    let expiredAttempts = 0;
+    try {
+      expiredAttempts = await store.cleanExpiredPasswordAttempts();
+    } catch (e) { console.error('Cron: cleanExpiredPasswordAttempts failed:', e); }
+
+    let orphanedChunks = 0;
+    try {
+      const chunkResult = await store.cleanOrphanedChunks();
+      orphanedChunks = chunkResult.count;
+      if (chunkResult.chunks.length > 0) {
+        const tgChunkCleanup = new TelegramClient(env);
+        await Promise.allSettled(chunkResult.chunks.map(chunk =>
+          tgChunkCleanup.deleteMessage(chunk.tg_chat_id, chunk.tg_message_id).catch(() => {})
+        ));
+      }
+    } catch (e) { console.error('Cron: cleanOrphanedChunks failed:', e); }
+
+    console.log(`Cron cleanup: ${expiredShares} expired shares, ${orphanedShares} orphaned shares, ${staleUploads} stale multipart uploads, ${inconsistent} inconsistent objects, ${r2Cleaned} stale R2 cache entries, ${expiredAttempts} expired password attempts, ${orphanedChunks} orphaned chunks`);
+  },
+};
+
+async function authenticate(request: Request, url: URL, env: Env): Promise<AuthFailure | null> {
+  // Check for presigned URL auth
+  if (url.searchParams.has('X-Amz-Algorithm')) {
+    return verifySignature(request, url, env);
+  }
+
+  // Check Authorization header
+  const auth = request.headers.get('Authorization');
+  if (!auth) {
+    return { status: 403, code: 'AccessDenied', message: 'No authentication provided.' };
+  }
+
+  // Bearer token auth (tg-s3 extension + Telegram WebApp initData validation)
+  if (auth.startsWith('Bearer ')) {
+    const valid = await verifyBearer(request, env);
+    return valid
+      ? null
+      : { status: 403, code: 'AccessDenied', message: 'Invalid bearer token.' };
+  }
+
+  // SigV4 auth (returns specific error codes)
+  if (auth.startsWith('AWS4-HMAC-SHA256')) {
+    return verifySignature(request, url, env);
+  }
+
+  return { status: 403, code: 'AccessDenied', message: 'Unsupported authentication scheme.' };
+}
+
+// S3 sub-resource query parameters that indicate a distinct operation.
+// If any of these are present, the request must NOT fall through to data
+// operations (GetObject, PutObject, DeleteObject) — doing so could
+// silently corrupt data (e.g. PUT ?acl would overwrite the object with
+// the ACL XML body).
+const UNSUPPORTED_SUBRESOURCES = new Set([
+  'acl', 'tagging', 'policy', 'cors', 'lifecycle', 'encryption',
+  'notification', 'replication', 'website', 'logging', 'analytics',
+  'metrics', 'inventory', 'accelerate', 'requestPayment',
+  'object-lock', 'legal-hold', 'retention', 'torrent', 'restore',
+  'select', 'intelligent-tiering', 'ownershipControls',
+  'publicAccessBlock', 'versions',
+]);
+
+function hasUnsupportedSubresource(query: URLSearchParams): string | null {
+  for (const name of UNSUPPORTED_SUBRESOURCES) {
+    if (query.has(name)) return name;
+  }
+  return null;
+}
+
+function routeS3Request(s3: S3Request): S3Operation | null {
+  const { method, bucket, key, query, headers } = s3;
+
+  if (!bucket) {
+    if (method === 'GET') return 'ListBuckets';
+    return null;
+  }
+
+  if (!key) {
+    if (method === 'GET' && query.has('location')) return 'GetBucketLocation';
+    if (method === 'GET' && query.has('versioning')) return 'GetBucketVersioning';
+    if (method === 'GET' && query.has('uploads')) return 'ListMultipartUploads';
+    // Block unsupported bucket sub-resource operations before falling to ListObjects
+    if (hasUnsupportedSubresource(query)) return null;
+    if (method === 'GET' && query.get('list-type') === '2') return 'ListObjectsV2';
+    if (method === 'GET') return 'ListObjects';
+    if (method === 'HEAD') return 'HeadBucket';
+    if (method === 'PUT') return 'CreateBucket';
+    if (method === 'DELETE') return 'DeleteBucket';
+    if (method === 'POST' && query.has('delete')) return 'DeleteObjects';
+    return null;
+  }
+
+  // Key present — block unsupported object sub-resource operations before
+  // they fall through to data operations (prevents data corruption)
+  if (method === 'GET') {
+    if (query.has('uploadId')) return 'ListParts';
+    if (hasUnsupportedSubresource(query)) return null;
+    return 'GetObject';
+  }
+
+  if (method === 'HEAD') return 'HeadObject';
+
+  if (method === 'PUT') {
+    if (query.has('partNumber') && headers.get('x-amz-copy-source')) return 'UploadPartCopy';
+    if (query.has('partNumber')) return 'UploadPart';
+    if (hasUnsupportedSubresource(query)) return null;
+    if (headers.get('x-amz-copy-source')) return 'CopyObject';
+    return 'PutObject';
+  }
+
+  if (method === 'DELETE') {
+    if (query.has('uploadId')) return 'AbortMultipartUpload';
+    if (hasUnsupportedSubresource(query)) return null;
+    return 'DeleteObject';
+  }
+
+  if (method === 'POST') {
+    if (query.has('uploads')) return 'CreateMultipartUpload';
+    if (query.has('uploadId')) return 'CompleteMultipartUpload';
+    return null;
+  }
+
+  return null;
+}
+
+async function dispatchS3(op: S3Operation, s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  switch (op) {
+    case 'ListBuckets': return handleListBuckets(s3, env);
+    case 'CreateBucket': return handleCreateBucket(s3, env);
+    case 'DeleteBucket': return handleDeleteBucket(s3, env);
+    case 'HeadBucket': return handleHeadBucket(s3, env);
+    case 'GetBucketLocation': return handleGetBucketLocation(s3, env);
+    case 'GetBucketVersioning': return handleGetBucketVersioning(s3, env);
+    case 'ListObjectsV2': return handleListObjectsV2(s3, env);
+    case 'ListObjects': return handleListObjects(s3, env);
+    case 'GetObject': return handleGetObject(s3, env, ctx);
+    case 'PutObject': return handlePutObject(s3, env, ctx);
+    case 'HeadObject': return handleHeadObject(s3, env);
+    case 'DeleteObject': return handleDeleteObject(s3, env, ctx);
+    case 'CopyObject': return handleCopyObject(s3, env, ctx);
+    case 'DeleteObjects': return handleDeleteObjects(s3, env, ctx);
+    case 'CreateMultipartUpload': return handleCreateMultipartUpload(s3, env);
+    case 'UploadPart': return handleUploadPart(s3, env, ctx);
+    case 'UploadPartCopy': return handleUploadPartCopy(s3, env, ctx);
+    case 'CompleteMultipartUpload': return handleCompleteMultipartUpload(s3, env, ctx);
+    case 'AbortMultipartUpload': return handleAbortMultipartUpload(s3, env, ctx);
+    case 'ListParts': return handleListParts(s3, env);
+    case 'ListMultipartUploads': return handleListMultipartUploads(s3, env);
+    default: return errorResponse(400, 'InvalidRequest', `Unknown operation: ${op}`);
+  }
+}
+
+async function handlePresignApi(request: Request, url: URL, env: Env): Promise<Response> {
+  let body: { bucket: string; key: string; method?: string; expiresIn?: number };
+  try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+  if (!body.bucket || !body.key) {
+    return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+  }
+  const presignedUrl = await generatePresignedUrl({
+    bucket: body.bucket,
+    key: body.key,
+    method: body.method,
+    expiresIn: body.expiresIn,
+    env,
+    baseUrl: url.origin,
+  });
+  return Response.json({ url: presignedUrl });
+}
+
+async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const path = url.pathname;
+  const method = request.method;
+  const store = new MetadataStore(env);
+
+  // GET /api/miniapp/buckets
+  if (path === '/api/miniapp/buckets' && method === 'GET') {
+    const buckets = await store.listBuckets();
+    return Response.json(buckets);
+  }
+
+  // GET /api/miniapp/objects?bucket=...&prefix=...&delimiter=...&maxKeys=...
+  if (path === '/api/miniapp/objects' && method === 'GET') {
+    const bucket = url.searchParams.get('bucket');
+    if (!bucket) return Response.json({ error: 'bucket required' }, { status: 400 });
+    const prefix = url.searchParams.get('prefix') || '';
+    const delimiter = url.searchParams.get('delimiter') || '/';
+    const maxKeys = Math.max(1, Math.min(1000, parseInt(url.searchParams.get('maxKeys') || '100', 10) || 100));
+    const startAfter = url.searchParams.get('startAfter') || undefined;
+    const result = await store.listObjects(bucket, prefix, delimiter, maxKeys, startAfter);
+    return Response.json(result);
+  }
+
+  // GET /api/miniapp/object?bucket=...&key=...
+  if (path === '/api/miniapp/object' && method === 'GET') {
+    const bucket = url.searchParams.get('bucket');
+    const key = url.searchParams.get('key');
+    if (!bucket || !key) return Response.json({ error: 'bucket and key required' }, { status: 400 });
+    const obj = await store.getObject(bucket, key);
+    if (!obj) return Response.json({ error: 'Not found' }, { status: 404 });
+    return Response.json(obj);
+  }
+
+  // DELETE /api/miniapp/object?bucket=...&key=...
+  if (path === '/api/miniapp/object' && method === 'DELETE') {
+    const bucket = url.searchParams.get('bucket');
+    const key = url.searchParams.get('key');
+    if (!bucket || !key) return Response.json({ error: 'bucket and key required' }, { status: 400 });
+    const s3: S3Request = {
+      method: 'DELETE', bucket, key,
+      query: new URLSearchParams(), headers: request.headers,
+      body: null, url,
+    };
+    const res = await handleDeleteObject(s3, env, ctx);
+    return res;
+  }
+
+  // POST /api/miniapp/share
+  if (path === '/api/miniapp/share' && method === 'POST') {
+    let body: {
+      bucket: string; key: string; expiresIn?: number;
+      password?: string; maxDownloads?: number;
+    };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    if (!body.bucket || !body.key) return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+    const obj = await store.getObject(body.bucket, body.key);
+    if (!obj) return Response.json({ error: 'Object not found' }, { status: 404 });
+    const { createShareToken } = await import('./sharing/tokens');
+    const share = await createShareToken(body, env);
+    return Response.json({ ...share, url: `${url.origin}/share/${share.token}` });
+  }
+
+  // GET /api/miniapp/shares?bucket=...
+  if (path === '/api/miniapp/shares' && method === 'GET') {
+    const bucket = url.searchParams.get('bucket') || undefined;
+    const tokens = await store.listShareTokens(bucket);
+    return Response.json(tokens);
+  }
+
+  // DELETE /api/miniapp/share?token=...
+  if (path === '/api/miniapp/share' && method === 'DELETE') {
+    const token = url.searchParams.get('token');
+    if (!token) return Response.json({ error: 'token required' }, { status: 400 });
+    await store.deleteShareToken(token);
+    return new Response(null, { status: 204 });
+  }
+
+  // GET /api/miniapp/search?bucket=...&q=...
+  if (path === '/api/miniapp/search' && method === 'GET') {
+    const bucket = url.searchParams.get('bucket');
+    const q = url.searchParams.get('q');
+    if (!bucket || !q) return Response.json({ error: 'bucket and q required' }, { status: 400 });
+    const results = await store.searchObjects(bucket, q, 200);
+    // Filter out derivative objects
+    const filtered = results.filter(o => !o.key.includes('._derivatives/'));
+    return Response.json(filtered);
+  }
+
+  // POST /api/miniapp/rename - atomic rename within same bucket
+  if (path === '/api/miniapp/rename' && method === 'POST') {
+    let body: { bucket: string; oldKey: string; newKey: string };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    if (!body.bucket || !body.oldKey || !body.newKey) return Response.json({ error: 'bucket, oldKey, newKey required' }, { status: 400 });
+    if (body.oldKey === body.newKey) return Response.json({ error: 'Keys are identical' }, { status: 400 });
+    const success = await store.renameObject(body.bucket, body.oldKey, body.newKey);
+    if (!success) return Response.json({ error: 'Rename failed: source not found or destination exists' }, { status: 409 });
+    return Response.json({ renamed: true });
+  }
+
+  // GET /api/miniapp/stats
+  if (path === '/api/miniapp/stats' && method === 'GET') {
+    const buckets = await store.listBuckets();
+    const totalFiles = buckets.reduce((s, b) => s + b.object_count, 0);
+    const totalSize = buckets.reduce((s, b) => s + b.total_size, 0);
+    return Response.json({ bucketCount: buckets.length, totalFiles, totalSize });
+  }
+
+  // POST /api/miniapp/bucket - create bucket
+  if (path === '/api/miniapp/bucket' && method === 'POST') {
+    let body: { name: string };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    if (!body.name) return Response.json({ error: 'name required' }, { status: 400 });
+    // Reuse S3 CreateBucket handler via internal S3Request
+    const s3: S3Request = {
+      method: 'PUT', bucket: body.name, key: '',
+      query: new URLSearchParams(), headers: request.headers,
+      body: null, url,
+    };
+    const res = await handleCreateBucket(s3, env);
+    if (res.status === 200) {
+      return Response.json({ name: body.name, created: true });
+    }
+    // Parse error from XML response
+    const text = await res.text();
+    const codeMatch = text.match(/<Code>([^<]+)<\/Code>/);
+    const msgMatch = text.match(/<Message>([^<]+)<\/Message>/);
+    return Response.json({ error: msgMatch?.[1] || codeMatch?.[1] || 'Failed' }, { status: res.status });
+  }
+
+  // POST /api/miniapp/presign
+  if (path === '/api/miniapp/presign' && method === 'POST') {
+    let body: { bucket: string; key: string; method?: string; expiresIn?: number };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    if (!body.bucket || !body.key) {
+      return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+    }
+    const presignedUrl = await generatePresignedUrl({
+      bucket: body.bucket, key: body.key, method: body.method,
+      expiresIn: body.expiresIn, env, baseUrl: url.origin,
+    });
+    return Response.json({ url: presignedUrl });
+  }
+
+  return Response.json({ error: 'Not found' }, { status: 404 });
+}
+
+function generateRequestId(): string {
+  const buf = new Uint8Array(8);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+function handleCors(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, HEAD, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Amz-Date, X-Amz-Content-Sha256, X-Amz-Security-Token, X-Amz-Copy-Source, X-Amz-Copy-Source-Range, X-Amz-Metadata-Directive, X-Amz-Copy-Source-If-Match, X-Amz-Copy-Source-If-None-Match, X-Amz-Copy-Source-If-Modified-Since, X-Amz-Copy-Source-If-Unmodified-Since, X-Amz-Acl, X-Amz-Tagging, X-Amz-Server-Side-Encryption, X-Amz-Storage-Class, Content-MD5, Content-Disposition, Content-Encoding, Content-Language, Cache-Control, Expires, Range, If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since, X-Amz-Meta-*',
+      'Access-Control-Expose-Headers': 'ETag, Content-Length, Content-Range, Last-Modified, Accept-Ranges, Content-Disposition, Content-Encoding, x-amz-request-id, x-amz-id-2, x-amz-error-code, x-amz-error-message, x-amz-mp-parts-count, x-amz-bucket-region, x-amz-meta-*, Retry-After, Location, Date',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
+}
+
+function addCorsHeaders(response: Response): Response {
+  const newHeaders = new Headers(response.headers);
+  newHeaders.set('Access-Control-Allow-Origin', '*');
+  newHeaders.set('Access-Control-Expose-Headers', 'ETag, Content-Length, Content-Range, Last-Modified, Accept-Ranges, Content-Disposition, Content-Encoding, x-amz-request-id, x-amz-id-2, x-amz-error-code, x-amz-error-message, x-amz-mp-parts-count, x-amz-bucket-region, x-amz-meta-*, Retry-After, Location, Date');
+  // S3 includes Date in all responses; AWS SDKs use it for clock skew detection
+  if (!newHeaders.has('Date')) {
+    newHeaders.set('Date', new Date().toUTCString());
+  }
+  if (!newHeaders.has('x-amz-request-id')) {
+    newHeaders.set('x-amz-request-id', generateRequestId());
+  }
+  if (!newHeaders.has('x-amz-id-2')) {
+    newHeaders.set('x-amz-id-2', generateRequestId() + generateRequestId());
+  }
+  // S3 returns Server: AmazonS3 on all responses; some SDKs/tools check this header
+  if (!newHeaders.has('Server')) {
+    newHeaders.set('Server', 'AmazonS3');
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders,
+  });
+}

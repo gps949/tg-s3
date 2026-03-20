@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # 部署 CF Worker 到 Cloudflare + 启动本地 processor:
+  #   docker compose up -d
+  #
+  # 仅重新部署 CF Worker (不重启 processor):
+  #   docker compose run --rm deploy
+  deploy:
+    build:
+      context: .
+      dockerfile: Dockerfile.deploy
+    env_file: .env
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - CLOUDFLARE_ACCOUNT_ID=${CF_ACCOUNT_ID:-}
+    restart: "no"
+
+  # VPS 本地处理服务 (大文件 + 媒体处理)
+  processor:
+    build: ./processor
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${VPS_PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - AUTH_SECRET=${VPS_SECRET}
+      - TG_LOCAL_API=${TG_LOCAL_API:-https://api.telegram.org}
+      - DEFAULT_CHAT_ID=${DEFAULT_CHAT_ID}
+      - TEMP_DIR=/tmp/tg-s3
+    volumes:
+      - processor-data:/tmp/tg-s3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # Optional: Telegram Local Bot API Server for 2GB file support
+  # telegram-bot-api:
+  #   image: aiogram/telegram-bot-api:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+  #     - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+  #     - TELEGRAM_LOCAL=1
+  #   ports:
+  #     - "127.0.0.1:8081:8081"
+  #   volumes:
+  #     - tg-bot-api-data:/var/lib/telegram-bot-api
+
+volumes:
+  processor-data:
+  # tg-bot-api-data:

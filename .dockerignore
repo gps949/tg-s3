@@ -1,0 +1,5 @@
+node_modules
+processor/node_modules
+.env
+.wrangler
+.git

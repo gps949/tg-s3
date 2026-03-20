@@ -1,0 +1,18 @@
+name = "tg-s3"
+main = "src/index.ts"
+compatibility_date = "2026-03-15"
+
+[vars]
+S3_REGION = "us-east-1"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tg-s3-db"
+database_id = ""
+
+[[r2_buckets]]
+binding = "CACHE"
+bucket_name = "tg-s3-cache"
+
+[triggers]
+crons = ["0 */6 * * *"]  # Every 6 hours: 7 cleanup tasks (expired/orphaned shares, stale multiparts, D1-TG consistency, R2 cache, password locks, orphaned chunks)

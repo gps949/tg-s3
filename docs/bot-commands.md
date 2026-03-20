@@ -1,0 +1,162 @@
+# Telegram Bot Commands
+
+[English](bot-commands.md) | [中文](bot-commands.zh.md) | [日本語](bot-commands.ja.md) | [Français](bot-commands.fr.md)
+
+## Overview
+
+The TG-S3 bot provides a Telegram interface for managing your S3 storage. All commands work in the designated storage group or in direct messages with the bot.
+
+## Commands
+
+### /start
+
+Displays a welcome message with a brief introduction and quick start guide.
+
+### /help
+
+Shows the full command reference with syntax and examples.
+
+### /buckets
+
+Lists all buckets with their object count and total size.
+
+```
+/buckets
+```
+
+Output example:
+```
+Buckets (3):
+  default - 42 objects, 156.3 MB
+  photos  - 128 objects, 1.2 GB
+  backup  - 7 objects, 89.5 MB
+```
+
+### /ls
+
+Lists objects in a bucket with optional prefix filtering.
+
+```
+/ls [bucket] [prefix]
+```
+
+- Without arguments: lists objects in the default bucket
+- With bucket: lists objects in that bucket
+- With prefix: filters by key prefix (acts like a directory listing)
+
+Examples:
+```
+/ls
+/ls photos
+/ls photos 2024/january/
+```
+
+### /info
+
+Shows detailed information about a specific object.
+
+```
+/info <bucket> <key>
+```
+
+Output includes: size, content type, ETag, upload date, Telegram file ID, cache status, and any active shares.
+
+### /search
+
+Searches objects across all buckets by key pattern.
+
+```
+/search <query>
+```
+
+The query matches against object keys using substring search.
+
+### /share
+
+Creates a share link for a file with optional restrictions.
+
+```
+/share <bucket> <key>
+```
+
+The bot will present inline buttons to configure:
+- **Expiry**: 1 hour, 24 hours, 7 days, 30 days, or no expiry
+- **Password**: optional password protection
+- **Max downloads**: optional download limit
+
+The generated link format: `https://your-worker.workers.dev/share/<token>`
+
+Share links support:
+- `/share/<token>` -- Preview page with metadata
+- `/share/<token>/download` -- Direct download
+- `/share/<token>/inline` -- Inline display (images, videos)
+
+### /shares
+
+Lists all active (non-expired, non-exhausted) share tokens.
+
+```
+/shares
+```
+
+Shows token, linked file, creation date, expiry, download count, and password status.
+
+### /revoke
+
+Revokes an active share token, making the link immediately invalid.
+
+```
+/revoke <token>
+```
+
+### /delete
+
+Deletes an object from storage. Requires confirmation via inline button.
+
+```
+/delete <bucket> <key>
+```
+
+Deletion is a full cascade: removes the Telegram message, all derivative objects (thumbnails, transcoded versions), associated share tokens, and cache entries.
+
+### /stats
+
+Shows storage statistics across all buckets.
+
+```
+/stats
+```
+
+Output includes: total objects, total size, bucket count, active shares, pending multipart uploads.
+
+### /setbucket
+
+Sets the default bucket for subsequent commands that accept an optional bucket parameter.
+
+```
+/setbucket <name>
+```
+
+### /miniapp
+
+Opens the Telegram Mini App inline interface for full-featured file management with a graphical UI.
+
+```
+/miniapp
+```
+
+## File Upload
+
+Send any file (document, photo, video, audio) directly to the bot to upload it. The file will be stored in the default bucket with the original filename as the key.
+
+For photos sent as compressed images (not documents), the bot stores the highest-resolution version available.
+
+## Callback Actions
+
+Some commands trigger inline buttons for interactive workflows:
+
+- **Delete confirmation** -- "Yes, delete" / "Cancel" buttons after `/delete`
+- **Share configuration** -- Expiry and option selection after `/share`
+- **Pagination** -- "Next page" / "Previous page" for long listings
+
+Callback data has a 5-10 minute TTL. If buttons stop responding, re-issue the command.

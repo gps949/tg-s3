@@ -1,0 +1,19 @@
+{
+  "name": "tg-s3",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:all": "./deploy.sh --all",
+    "deploy:cf": "./deploy.sh --cf-only",
+    "deploy:vps": "./deploy.sh --vps-only",
+    "db:init": "wrangler d1 execute tg-s3-db --local --file=src/storage/schema.sql",
+    "db:init:remote": "wrangler d1 execute tg-s3-db --remote --file=src/storage/schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.100.0"
+  }
+}
