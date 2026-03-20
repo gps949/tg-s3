@@ -1,14 +1,15 @@
-import type { Env, AuthFailure } from '../types';
+import type { Env, AuthFailure, AuthContext } from '../types';
 import { hmacSha256, sha256Hex, bufToHex, timingSafeEqual } from '../utils/crypto';
 
+export type CredentialResolver = (accessKeyId: string) => Promise<{ secretKey: string; context: AuthContext } | null>;
+
 /**
- * Verify SigV4 signature. Returns null on success, or an AuthFailure with
- * a specific S3-compatible error code on failure.
+ * Verify SigV4 signature. Returns AuthContext on success, or AuthFailure on failure.
  */
-export async function verifySignature(request: Request, url: URL, env: Env): Promise<AuthFailure | null> {
+export async function verifySignature(request: Request, url: URL, resolve: CredentialResolver): Promise<AuthFailure | AuthContext> {
   try {
     if (url.searchParams.has('X-Amz-Algorithm')) {
-      return verifyQueryStringAuth(request, url, env);
+      return verifyQueryStringAuth(request, url, resolve);
     }
 
     const authHeader = request.headers.get('Authorization');
@@ -27,9 +28,12 @@ export async function verifySignature(request: Request, url: URL, env: Env): Pro
       return { status: 400, code: 'AuthorizationHeaderMalformed', message: 'The authorization header is malformed.' };
     }
     const [accessKeyId, dateStr, region, service] = credParts;
-    if (accessKeyId !== env.S3_ACCESS_KEY_ID) {
+
+    const resolved = await resolve(accessKeyId);
+    if (!resolved) {
       return { status: 403, code: 'InvalidAccessKeyId', message: 'The AWS Access Key Id you provided does not exist in our records.' };
     }
+
     if (service !== 's3') {
       return { status: 400, code: 'AuthorizationHeaderMalformed', message: 'The authorization header is malformed.' };
     }
@@ -58,20 +62,20 @@ export async function verifySignature(request: Request, url: URL, env: Env): Pro
     const crHash = await sha256Hex(new TextEncoder().encode(canonicalRequest).buffer as ArrayBuffer);
     const scope = `${dateStr}/${region}/${service}/aws4_request`;
     const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${crHash}`;
-    const signingKey = await deriveSigningKey(env.S3_SECRET_ACCESS_KEY, dateStr, region, service);
+    const signingKey = await deriveSigningKey(resolved.secretKey, dateStr, region, service);
     const computed = bufToHex(await hmacSha256(signingKey, stringToSign));
 
     if (!timingSafeEqual(computed, signature)) {
       return { status: 403, code: 'SignatureDoesNotMatch', message: 'The request signature we calculated does not match the signature you provided.' };
     }
 
-    return null; // success
+    return resolved.context; // success
   } catch {
     return { status: 403, code: 'AccessDenied', message: 'Access Denied.' };
   }
 }
 
-async function verifyQueryStringAuth(request: Request, url: URL, env: Env): Promise<AuthFailure | null> {
+async function verifyQueryStringAuth(request: Request, url: URL, resolve: CredentialResolver): Promise<AuthFailure | AuthContext> {
   const algorithm = url.searchParams.get('X-Amz-Algorithm');
   if (algorithm !== 'AWS4-HMAC-SHA256') {
     return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Query-string authentication requires the X-Amz-Algorithm query parameter.' };
@@ -83,9 +87,12 @@ async function verifyQueryStringAuth(request: Request, url: URL, env: Env): Prom
     return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Invalid X-Amz-Credential parameter.' };
   }
   const [accessKeyId, dateStr, region, service] = credParts;
-  if (accessKeyId !== env.S3_ACCESS_KEY_ID) {
+
+  const resolved = await resolve(accessKeyId);
+  if (!resolved) {
     return { status: 403, code: 'InvalidAccessKeyId', message: 'The AWS Access Key Id you provided does not exist in our records.' };
   }
+
   if (service !== 's3') {
     return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Invalid X-Amz-Credential parameter.' };
   }
@@ -136,14 +143,14 @@ async function verifyQueryStringAuth(request: Request, url: URL, env: Env): Prom
   const crHash = await sha256Hex(new TextEncoder().encode(canonicalRequest).buffer as ArrayBuffer);
   const scope = `${dateStr}/${region}/${service}/aws4_request`;
   const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${crHash}`;
-  const signingKey = await deriveSigningKey(env.S3_SECRET_ACCESS_KEY, dateStr, region, service);
+  const signingKey = await deriveSigningKey(resolved.secretKey, dateStr, region, service);
   const computed = bufToHex(await hmacSha256(signingKey, stringToSign));
 
   if (!timingSafeEqual(computed, providedSig)) {
     return { status: 403, code: 'SignatureDoesNotMatch', message: 'The request signature we calculated does not match the signature you provided.' };
   }
 
-  return null; // success
+  return resolved.context; // success
 }
 
 function parseAuthHeader(header: string): { credential: string; signedHeaders: string; signature: string } | null {

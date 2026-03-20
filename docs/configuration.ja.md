@@ -12,9 +12,25 @@
 |------|------|-----|
 | `TG_BOT_TOKEN` | @BotFather から取得した Telegram Bot API トークン | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `DEFAULT_CHAT_ID` | Telegram グループ/スーパーグループの Chat ID | `-1001234567890` |
-| `S3_ACCESS_KEY_ID` | クライアント認証用の S3 アクセスキー | `myaccesskey` |
-| `S3_SECRET_ACCESS_KEY` | クライアント認証用の S3 シークレットキー | `mysecretkey123` |
-| `BEARER_TOKEN` | Bot Webhook 検証と内部認証用の共有シークレット | `random-string-here` |
+
+### 自動生成（手動設定不要）
+
+| 変数 | 説明 | 生成元 |
+|------|------|--------|
+| `BEARER_TOKEN` | Bot Webhook 検証と内部認証用の共有シークレット | `deploy.sh`（ランダム 48 文字） |
+| `VPS_SECRET` | Worker とプロセッサ間の認証シークレット | `deploy.sh`（ランダム 48 文字） |
+| S3 認証情報 | S3 API 認証用のアクセスキー + シークレットキー | `deploy.sh`（D1 `credentials` テーブルに作成） |
+
+S3 認証情報はデプロイ時に 1 回だけ表示されます。以後は Mini App の **Keys** タブで管理できます（作成、無効化、バケット別権限設定）。
+
+### レガシー S3 認証情報（オプション）
+
+| 変数 | 説明 | 例 |
+|------|------|-----|
+| `S3_ACCESS_KEY_ID` | レガシー単一 S3 アクセスキー（D1 に認証情報がない場合のフォールバック） | `myaccesskey` |
+| `S3_SECRET_ACCESS_KEY` | レガシー単一 S3 シークレットキー | `mysecretkey123` |
+
+新規デプロイでは D1 マルチ認証情報システムを使用します。これらの環境変数は既存デプロイの後方互換性のためにのみ必要です。
 
 ### Cloudflare（Docker デプロイ）
 
@@ -22,7 +38,10 @@
 |------|------|-----|
 | `CLOUDFLARE_API_TOKEN` | CF API トークン（Docker では必須、手動では任意） | `cf-api-token...` |
 | `CF_ACCOUNT_ID` | CF アカウント ID（未設定の場合は自動検出） | `abc123def456` |
-| `CF_CUSTOM_DOMAIN` | Worker のカスタムドメイン | `s3.example.com` |
+| `CF_CUSTOM_DOMAIN` | Worker のカスタムドメイン（トンネルの自動作成も有効化） | `s3.example.com` |
+| `CF_TUNNEL_TOKEN` | Cloudflare Tunnel コネクタートークン（CF_CUSTOM_DOMAIN 設定時に自動作成、または手動設定） | `eyJhIjo...` |
+
+API トークン権限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Settings:Read。トンネル自動作成には追加で Cloudflare Tunnel:Edit と DNS:Edit が必要です。
 
 ### VPS / プロセッサ（オプション）
 
@@ -31,8 +50,8 @@
 | `VPS_SSH` | VPS デプロイ用の SSH 接続文字列 | -- |
 | `VPS_DEPLOY_DIR` | VPS 上のデプロイディレクトリ | `/opt/tg-s3` |
 | `VPS_PORT` | プロセッササービスのポート | `3000` |
-| `VPS_URL` | VPS プロセッサの公開 URL | -- |
-| `VPS_SECRET` | Worker とプロセッサ間の認証シークレット | -- |
+| `VPS_URL` | VPS プロセッサの公開 URL（トンネル使用時は自動設定） | -- |
+| `VPS_SECRET` | Worker とプロセッサ間の認証シークレット（自動生成） | -- |
 | `TG_LOCAL_API` | Telegram Local Bot API エンドポイント | `https://api.telegram.org` |
 
 ### Worker ランタイム
@@ -89,9 +108,9 @@ crons = ["0 */6 * * *"]  # 6 時間ごとのメンテナンス
 
 ## セキュリティに関する注意事項
 
-- **S3 クレデンシャル**は AWS SigV4 署名検証に使用されます。強力でランダムな値を設定してください。
-- **BEARER_TOKEN** は Telegram Webhook 呼び出しと署名付き URL の生成を認証します。秘密に保管してください。
-- **VPS_SECRET** は Worker からプロセッサへの通信を認証します。別のランダムな値を使用してください。
+- **S3 認証情報**は D1 に保存され、AWS SigV4 署名検証に使用されます。高強度のランダム値が自動生成されます。Mini App の Keys タブで管理してください。
+- **BEARER_TOKEN** は Telegram Webhook 呼び出しと Mini App initData の検証に使用されます。未設定時は自動生成されます。
+- **VPS_SECRET** は Worker からプロセッサへの通信を認証します。未設定時は自動生成されます。
 - **CLOUDFLARE_API_TOKEN** は CF アカウントへの書き込み権限を持ちます。git にコミットしないでください。
 - `.env` ファイルはデフォルトで `.gitignore` と `.dockerignore` に含まれています。
 

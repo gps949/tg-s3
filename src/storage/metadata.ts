@@ -1,4 +1,4 @@
-import type { Env, ObjectRow, BucketRow, MultipartUploadRow, MultipartPartRow, ShareTokenRow, ChunkRow } from '../types';
+import type { Env, ObjectRow, BucketRow, MultipartUploadRow, MultipartPartRow, ShareTokenRow, ChunkRow, CredentialRow } from '../types';
 
 // S3 timestamps have second precision; truncate milliseconds to avoid
 // If-Modified-Since comparison failures (HTTP dates lack ms component)
@@ -683,5 +683,59 @@ export class MetadataStore {
       allParts.push(...(results[i] as D1Result<MultipartPartRow>).results);
     }
     return { count: uploads.results.length, parts: allParts };
+  }
+
+  // ── Credentials ──
+
+  async getCredentialByAccessKey(accessKeyId: string): Promise<CredentialRow | null> {
+    return await this.db.prepare(
+      'SELECT * FROM credentials WHERE access_key_id = ? AND is_active = 1'
+    ).bind(accessKeyId).first<CredentialRow>();
+  }
+
+  async listCredentials(): Promise<CredentialRow[]> {
+    const r = await this.db.prepare(
+      'SELECT * FROM credentials ORDER BY created_at DESC'
+    ).all<CredentialRow>();
+    return r.results;
+  }
+
+  async createCredential(cred: { accessKeyId: string; secretAccessKey: string; name: string; buckets: string; permission: string }): Promise<void> {
+    await this.db.prepare(
+      'INSERT INTO credentials (access_key_id, secret_access_key, name, buckets, permission) VALUES (?, ?, ?, ?, ?)'
+    ).bind(cred.accessKeyId, cred.secretAccessKey, cred.name, cred.buckets, cred.permission).run();
+  }
+
+  async deleteCredential(accessKeyId: string): Promise<boolean> {
+    const r = await this.db.prepare(
+      'DELETE FROM credentials WHERE access_key_id = ?'
+    ).bind(accessKeyId).run();
+    return (r.meta?.changes ?? 0) > 0;
+  }
+
+  async updateCredential(accessKeyId: string, updates: { name?: string; buckets?: string; permission?: string; is_active?: number }): Promise<boolean> {
+    const sets: string[] = [];
+    const vals: (string | number)[] = [];
+    if (updates.name !== undefined) { sets.push('name = ?'); vals.push(updates.name); }
+    if (updates.buckets !== undefined) { sets.push('buckets = ?'); vals.push(updates.buckets); }
+    if (updates.permission !== undefined) { sets.push('permission = ?'); vals.push(updates.permission); }
+    if (updates.is_active !== undefined) { sets.push('is_active = ?'); vals.push(updates.is_active); }
+    if (sets.length === 0) return false;
+    vals.push(accessKeyId);
+    const r = await this.db.prepare(
+      `UPDATE credentials SET ${sets.join(', ')} WHERE access_key_id = ?`
+    ).bind(...vals).run();
+    return (r.meta?.changes ?? 0) > 0;
+  }
+
+  async touchCredentialLastUsed(accessKeyId: string): Promise<void> {
+    await this.db.prepare(
+      'UPDATE credentials SET last_used_at = ? WHERE access_key_id = ?'
+    ).bind(isoNowSeconds(), accessKeyId).run();
+  }
+
+  async countCredentials(): Promise<number> {
+    const r = await this.db.prepare('SELECT COUNT(*) as cnt FROM credentials').first<{ cnt: number }>();
+    return r?.cnt ?? 0;
   }
 }

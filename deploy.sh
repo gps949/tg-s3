@@ -22,6 +22,13 @@ warn() { echo -e "${YELLOW}[!!]${NC} $1"; }
 err()  { echo -e "${RED}[ERR]${NC} $1" >&2; }
 step() { echo -e "\n${CYAN}==>${NC} $1"; }
 
+# 生成随机字符串 (base62, 指定长度)
+gen_random() {
+  local len="${1:-32}"
+  LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$len" 2>/dev/null || \
+    openssl rand -base64 "$((len * 2))" | tr -dc 'A-Za-z0-9' | head -c "$len"
+}
+
 # ---- 加载 .env ----
 if [ ! -f .env ]; then
   err "未找到 .env 文件。请复制 .env.example 为 .env 并填写配置:"
@@ -32,6 +39,17 @@ fi
 set -a
 source .env
 set +a
+
+# ---- 自动生成可自动化的 secrets ----
+# Webhook secret 从 TG_BOT_TOKEN 派生，不再需要 BEARER_TOKEN
+derive_webhook_secret() {
+  node -e "const c=require('crypto');console.log(c.createHmac('sha256',process.env.TG_BOT_TOKEN).update('tg-s3-webhook').digest('hex'))"
+}
+
+if [ -z "${VPS_SECRET:-}" ]; then
+  VPS_SECRET="$(gen_random 48)"
+  log "自动生成 VPS_SECRET"
+fi
 
 # ---- 参数解析 ----
 MODE="all"
@@ -49,7 +67,7 @@ esac
 # ---- 校验必填项 ----
 validate_required() {
   local missing=0
-  for var in TG_BOT_TOKEN DEFAULT_CHAT_ID S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY BEARER_TOKEN; do
+  for var in TG_BOT_TOKEN DEFAULT_CHAT_ID; do
     if [ -z "${!var:-}" ]; then
       err "缺少必填项: $var"
       missing=1
@@ -64,14 +82,6 @@ validate_required() {
 validate_vps() {
   if [ -z "${VPS_SSH:-}" ]; then
     err "VPS 部署需要设置 VPS_SSH (如 root@1.2.3.4)"
-    exit 1
-  fi
-  if [ -z "${VPS_URL:-}" ]; then
-    err "VPS 部署需要设置 VPS_URL (Worker 访问 VPS 的地址)"
-    exit 1
-  fi
-  if [ -z "${VPS_SECRET:-}" ]; then
-    err "VPS 部署需要设置 VPS_SECRET"
     exit 1
   fi
 }
@@ -157,18 +167,47 @@ deploy_cf() {
   npx wrangler d1 execute tg-s3-db --remote --file=src/storage/schema.sql --yes 2>&1 || true
   log "数据库 schema 已应用"
 
-  # 设置 secrets
+  # 创建初始 S3 凭据 (如果 credentials 表为空)
+  step "检查 S3 凭据"
+  CRED_COUNT=$(npx wrangler d1 execute tg-s3-db --remote --command="SELECT COUNT(*) as cnt FROM credentials" --json --yes 2>&1 | grep -o '"cnt":[0-9]*' | head -1 | grep -o '[0-9]*') || CRED_COUNT=""
+  if [ "$CRED_COUNT" = "0" ] || [ -z "$CRED_COUNT" ]; then
+    # 如果 .env 提供了 S3 凭据, 用它; 否则自动生成
+    if [ -n "${S3_ACCESS_KEY_ID:-}" ] && [ -n "${S3_SECRET_ACCESS_KEY:-}" ]; then
+      INIT_AK="$S3_ACCESS_KEY_ID"
+      INIT_SK="$S3_SECRET_ACCESS_KEY"
+    else
+      INIT_AK="TGS3$(gen_random 16)"
+      INIT_SK="$(gen_random 40)"
+    fi
+    npx wrangler d1 execute tg-s3-db --remote --command="INSERT OR IGNORE INTO credentials (access_key_id, secret_access_key, name, buckets, permission) VALUES ('$INIT_AK', '$INIT_SK', 'admin', '*', 'admin')" --yes 2>&1 || true
+    log "初始 admin S3 凭据已创建"
+    echo -e "  ${CYAN}Access Key ID:     ${INIT_AK}${NC}"
+    echo -e "  ${CYAN}Secret Access Key:  ${INIT_SK}${NC}"
+    echo -e "  ${YELLOW}请保存以上凭据! 之后可在 Mini App 的 Keys 标签页管理。${NC}"
+    # Store for summary
+    GENERATED_AK="$INIT_AK"
+    GENERATED_SK="$INIT_SK"
+  else
+    log "S3 凭据已存在 ($CRED_COUNT 个), 跳过创建"
+    GENERATED_AK=""
+    GENERATED_SK=""
+  fi
+
+  # 设置 secrets (BEARER_TOKEN 已移除, webhook secret 从 TG_BOT_TOKEN 派生)
   step "配置 Worker secrets"
   echo "$TG_BOT_TOKEN" | npx wrangler secret put TG_BOT_TOKEN 2>&1 || true
-  echo "$S3_ACCESS_KEY_ID" | npx wrangler secret put S3_ACCESS_KEY_ID 2>&1 || true
-  echo "$S3_SECRET_ACCESS_KEY" | npx wrangler secret put S3_SECRET_ACCESS_KEY 2>&1 || true
-  echo "$BEARER_TOKEN" | npx wrangler secret put BEARER_TOKEN 2>&1 || true
   echo "$DEFAULT_CHAT_ID" | npx wrangler secret put DEFAULT_CHAT_ID 2>&1 || true
+
+  # Legacy S3 env vars (for backwards compat; new deployments use D1 credentials)
+  if [ -n "${S3_ACCESS_KEY_ID:-}" ]; then
+    echo "$S3_ACCESS_KEY_ID" | npx wrangler secret put S3_ACCESS_KEY_ID 2>&1 || true
+    echo "$S3_SECRET_ACCESS_KEY" | npx wrangler secret put S3_SECRET_ACCESS_KEY 2>&1 || true
+  fi
 
   if [ -n "${VPS_URL:-}" ]; then
     echo "$VPS_URL" | npx wrangler secret put VPS_URL 2>&1 || true
-    echo "${VPS_SECRET:-}" | npx wrangler secret put VPS_SECRET 2>&1 || true
   fi
+  echo "$VPS_SECRET" | npx wrangler secret put VPS_SECRET 2>&1 || true
   log "Secrets 配置完成"
 
   # 部署 Worker
@@ -197,12 +236,12 @@ deploy_cf() {
   if [ -n "$EFFECTIVE_URL" ]; then
     step "注册 Telegram Bot Webhook"
     WEBHOOK_URL="$EFFECTIVE_URL/bot/webhook"
-    WEBHOOK_RES=$(curl -sf "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}&secret_token=${BEARER_TOKEN}" 2>&1) || true
+    WEBHOOK_SECRET=$(TG_BOT_TOKEN="$TG_BOT_TOKEN" derive_webhook_secret)
+    WEBHOOK_RES=$(curl -sf "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}&secret_token=${WEBHOOK_SECRET}" 2>&1) || true
     if echo "$WEBHOOK_RES" | grep -q '"ok":true'; then
       log "Webhook 注册成功: $WEBHOOK_URL"
     else
-      warn "Webhook 注册可能失败, 请手动检查:"
-      warn "  curl 'https://api.telegram.org/bot\${TG_BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}&secret_token=\${BEARER_TOKEN}'"
+      warn "Webhook 注册可能失败, 请手动检查"
       [ -n "$WEBHOOK_RES" ] && warn "  响应: $WEBHOOK_RES"
     fi
   fi
@@ -216,7 +255,176 @@ deploy_cf() {
 }
 
 # ============================================================
-# VPS 部署
+# Cloudflare Tunnel 自动创建
+# 需要: CLOUDFLARE_API_TOKEN + CF_CUSTOM_DOMAIN
+# 创建后写入 CF_TUNNEL_TOKEN 到 .env
+# ============================================================
+setup_tunnel() {
+  step "配置 Cloudflare Tunnel"
+
+  # 如果已有 token, 跳过创建
+  if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+    log "CF_TUNNEL_TOKEN 已设置, 跳过 tunnel 创建"
+    return 0
+  fi
+
+  # 需要 API Token 和自定义域名
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    warn "需要 CLOUDFLARE_API_TOKEN 来自动创建 tunnel"
+    warn "或在 CF Dashboard > Zero Trust > Tunnels 手动创建后设置 CF_TUNNEL_TOKEN"
+    return 1
+  fi
+
+  if [ -z "${CF_CUSTOM_DOMAIN:-}" ]; then
+    warn "需要 CF_CUSTOM_DOMAIN 来为 tunnel 分配域名"
+    warn "或在 CF Dashboard > Zero Trust > Tunnels 手动创建后设置 CF_TUNNEL_TOKEN"
+    return 1
+  fi
+
+  local CF_API="https://api.cloudflare.com/client/v4"
+  local AUTH_HEADER="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+
+  # 获取 Account ID
+  local ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+  if [ -z "$ACCOUNT_ID" ]; then
+    step "获取 Cloudflare Account ID"
+    ACCOUNT_ID=$(curl -sf "$CF_API/accounts" -H "$AUTH_HEADER" | \
+      node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || ACCOUNT_ID=""
+    if [ -z "$ACCOUNT_ID" ]; then
+      warn "无法获取 Account ID, 请在 .env 中设置 CF_ACCOUNT_ID"
+      return 1
+    fi
+    log "Account ID: ${ACCOUNT_ID:0:8}..."
+  fi
+
+  # 检查是否已有同名 tunnel
+  step "检查现有 tunnel"
+  local EXISTING=$(curl -sf "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel?name=tg-s3&is_deleted=false" \
+    -H "$AUTH_HEADER" | \
+    node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const t=d.result?.find(t=>t.name==='tg-s3'); console.log(t?.id||'')" 2>/dev/null) || EXISTING=""
+
+  local TUNNEL_ID=""
+  if [ -n "$EXISTING" ]; then
+    TUNNEL_ID="$EXISTING"
+    log "已有 tunnel tg-s3: ${TUNNEL_ID:0:8}..."
+  else
+    # 创建 tunnel
+    step "创建 Cloudflare Tunnel: tg-s3"
+    local TUNNEL_SECRET
+    TUNNEL_SECRET=$(openssl rand -base64 32 2>/dev/null || node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
+    local CREATE_RESP
+    CREATE_RESP=$(curl -sf -X POST "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel" \
+      -H "$AUTH_HEADER" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\":\"tg-s3\",\"tunnel_secret\":\"$TUNNEL_SECRET\",\"config_src\":\"cloudflare\"}") || CREATE_RESP=""
+    TUNNEL_ID=$(echo "$CREATE_RESP" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.id||'')" 2>/dev/null) || TUNNEL_ID=""
+    if [ -z "$TUNNEL_ID" ]; then
+      warn "tunnel 创建失败, 请在 CF Dashboard 手动创建"
+      [ -n "$CREATE_RESP" ] && warn "响应: $CREATE_RESP"
+      return 1
+    fi
+    log "Tunnel 创建成功: ${TUNNEL_ID:0:8}..."
+  fi
+
+  # 配置 tunnel ingress
+  local TUNNEL_HOSTNAME="vps.${CF_CUSTOM_DOMAIN}"
+  step "配置 tunnel ingress: $TUNNEL_HOSTNAME -> processor:3000"
+  curl -sf -X PUT "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
+    -H "$AUTH_HEADER" \
+    -H "Content-Type: application/json" \
+    -d "{\"config\":{\"ingress\":[{\"hostname\":\"$TUNNEL_HOSTNAME\",\"service\":\"http://processor:3000\",\"originRequest\":{\"noTLSVerify\":true}},{\"service\":\"http_status:404\"}]}}" >/dev/null 2>&1 || true
+  log "Tunnel ingress 已配置"
+
+  # 创建 DNS CNAME (如果不存在)
+  step "配置 DNS: $TUNNEL_HOSTNAME -> tunnel"
+  # 找到 zone: 从 CF_CUSTOM_DOMAIN 提取根域 (尝试匹配)
+  local ZONE_ID=""
+  # 先尝试完整域名, 再逐级去掉子域
+  local DOMAIN="$CF_CUSTOM_DOMAIN"
+  while [ -n "$DOMAIN" ] && [ -z "$ZONE_ID" ]; do
+    ZONE_ID=$(curl -sf "$CF_API/zones?name=$DOMAIN" -H "$AUTH_HEADER" | \
+      node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || ZONE_ID=""
+    if [ -z "$ZONE_ID" ]; then
+      # 去掉最左边的子域
+      DOMAIN="${DOMAIN#*.}"
+      # 如果没有点了, 停止
+      if [[ "$DOMAIN" != *.* ]]; then break; fi
+    fi
+  done
+
+  if [ -n "$ZONE_ID" ]; then
+    # 检查记录是否已存在
+    local EXISTING_DNS
+    EXISTING_DNS=$(curl -sf "$CF_API/zones/$ZONE_ID/dns_records?name=$TUNNEL_HOSTNAME&type=CNAME" \
+      -H "$AUTH_HEADER" | \
+      node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || EXISTING_DNS=""
+
+    if [ -n "$EXISTING_DNS" ]; then
+      # 更新现有记录
+      curl -sf -X PUT "$CF_API/zones/$ZONE_ID/dns_records/$EXISTING_DNS" \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        -d "{\"type\":\"CNAME\",\"name\":\"$TUNNEL_HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"proxied\":true}" >/dev/null 2>&1 || true
+      log "DNS 记录已更新: $TUNNEL_HOSTNAME"
+    else
+      # 创建新记录
+      curl -sf -X POST "$CF_API/zones/$ZONE_ID/dns_records" \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        -d "{\"type\":\"CNAME\",\"name\":\"$TUNNEL_HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"proxied\":true}" >/dev/null 2>&1 || true
+      log "DNS 记录已创建: $TUNNEL_HOSTNAME"
+    fi
+  else
+    warn "无法找到域名 $CF_CUSTOM_DOMAIN 对应的 CF Zone"
+    warn "请手动添加 DNS CNAME: $TUNNEL_HOSTNAME -> $TUNNEL_ID.cfargotunnel.com"
+  fi
+
+  # 获取 tunnel token
+  step "获取 tunnel connector token"
+  local TOKEN_RESP
+  TOKEN_RESP=$(curl -sf "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" \
+    -H "$AUTH_HEADER") || TOKEN_RESP=""
+  CF_TUNNEL_TOKEN=$(echo "$TOKEN_RESP" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result||'')" 2>/dev/null) || CF_TUNNEL_TOKEN=""
+
+  if [ -z "$CF_TUNNEL_TOKEN" ]; then
+    warn "无法获取 tunnel token"
+    warn "请在 CF Dashboard > Zero Trust > Tunnels > tg-s3 中获取 token"
+    return 1
+  fi
+  log "Tunnel token 已获取"
+
+  # 写入 .env (追加或更新)
+  if grep -q '^CF_TUNNEL_TOKEN=' .env 2>/dev/null; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      sed -i '' "s|^CF_TUNNEL_TOKEN=.*|CF_TUNNEL_TOKEN=$CF_TUNNEL_TOKEN|" .env
+    else
+      sed -i "s|^CF_TUNNEL_TOKEN=.*|CF_TUNNEL_TOKEN=$CF_TUNNEL_TOKEN|" .env
+    fi
+  else
+    echo "" >> .env
+    echo "CF_TUNNEL_TOKEN=$CF_TUNNEL_TOKEN" >> .env
+  fi
+  log "CF_TUNNEL_TOKEN 已写入 .env"
+
+  # 设置 VPS_URL 为 tunnel 域名
+  VPS_URL="https://$TUNNEL_HOSTNAME"
+  log "VPS_URL 已设为: $VPS_URL"
+
+  # 同步到 Worker secrets
+  echo "$VPS_URL" | npx wrangler secret put VPS_URL 2>&1 || true
+  log "VPS_URL secret 已更新"
+
+  echo ""
+  echo -e "  ${GREEN}Cloudflare Tunnel 配置完成${NC}"
+  echo -e "  Tunnel hostname: ${CYAN}$TUNNEL_HOSTNAME${NC}"
+  echo -e "  启动 tunnel:  ${CYAN}docker compose --profile tunnel up -d${NC}"
+  echo ""
+
+  TUNNEL_CONFIGURED=1
+}
+
+# ============================================================
+# VPS 部署 (非 Docker 模式, 通过 SSH 部署到远程 VPS)
 # ============================================================
 deploy_vps() {
   step "部署 VPS 处理服务"
@@ -316,34 +524,43 @@ print_summary() {
     echo -e "  Worker URL:  ${CYAN}${WORKER_URL}${NC}"
   fi
   if [ "$MODE" != "cf" ] && [ -n "${VPS_URL:-}" ]; then
-    echo -e "  VPS URL:     ${CYAN}${VPS_URL}${NC}"
+    if [ "$TUNNEL_CONFIGURED" -eq 1 ]; then
+      echo -e "  Tunnel URL:  ${CYAN}${VPS_URL}${NC} (via Cloudflare Tunnel)"
+    else
+      echo -e "  VPS URL:     ${CYAN}${VPS_URL}${NC}"
+    fi
+  fi
+
+  if [ -n "${GENERATED_AK:-}" ] && [ -n "${GENERATED_SK:-}" ]; then
+    echo ""
+    echo -e "  ${YELLOW}S3 凭据 (首次生成, 请保存!):${NC}"
+    echo "  ─────────────────────────────────────────"
+    echo -e "  Access Key ID:      ${CYAN}${GENERATED_AK}${NC}"
+    echo -e "  Secret Access Key:  ${CYAN}${GENERATED_SK}${NC}"
+    echo "  ─────────────────────────────────────────"
+    echo -e "  之后可在 Telegram Mini App 的 ${CYAN}Keys${NC} 标签页管理凭据"
+    echo ""
+    echo "  rclone 配置示例:"
+    echo "  ─────────────────────────────────────────"
+    echo "  [tg-s3]"
+    echo "  type = s3"
+    echo "  provider = Other"
+    echo "  env_auth = false"
+    echo "  access_key_id = ${GENERATED_AK}"
+    echo "  secret_access_key = ${GENERATED_SK}"
+    echo "  endpoint = ${WORKER_URL:-https://tg-s3.<your-subdomain>.workers.dev}"
+    echo "  acl = private"
+    echo "  ─────────────────────────────────────────"
+  else
+    echo ""
+    echo "  S3 凭据已存在, 可在 Mini App Keys 标签页管理"
   fi
 
   echo ""
-  echo "  rclone 配置示例:"
-  echo "  ─────────────────────────────────────────"
-  echo "  [tg-s3]"
-  echo "  type = s3"
-  echo "  provider = Other"
-  echo "  env_auth = false"
-  echo "  access_key_id = ${S3_ACCESS_KEY_ID}"
-  echo "  secret_access_key = ${S3_SECRET_ACCESS_KEY}"
-  echo "  endpoint = ${WORKER_URL:-https://tg-s3.<your-subdomain>.workers.dev}"
-  echo "  acl = private"
-  echo "  ─────────────────────────────────────────"
-  echo ""
   echo "  快速验证:"
-  echo "  # 创建 bucket"
   echo "  rclone mkdir tg-s3:photos"
-  echo ""
-  echo "  # 上传文件"
   echo "  rclone copy ./test.jpg tg-s3:photos/"
-  echo ""
-  echo "  # 列出文件"
   echo "  rclone ls tg-s3:photos/"
-  echo ""
-  echo "  # aws cli"
-  echo "  aws s3 ls --endpoint-url ${WORKER_URL:-https://tg-s3.workers.dev} s3://photos/"
   echo ""
 }
 
@@ -357,16 +574,24 @@ echo "  │   Telegram-backed S3 Storage         │"
 echo "  └─────────────────────────────────────┘"
 echo -e "${NC}"
 
+# 初始化 summary 变量
+GENERATED_AK=""
+GENERATED_SK=""
+TUNNEL_CONFIGURED=0
+
 validate_required
 
 case "$MODE" in
   cf)
     deploy_cf
+    # 尝试创建 tunnel (可选, 失败不阻塞)
+    setup_tunnel || true
     ;;
   vps)
     if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
       warn "Docker 环境下 processor 由 docker compose 管理, 无需单独部署"
       warn "运行: docker compose up -d processor"
+      warn "如需 tunnel: docker compose --profile tunnel up -d"
     else
       deploy_vps
     fi
@@ -374,9 +599,15 @@ case "$MODE" in
   all)
     deploy_cf
     if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-      # Docker 环境: processor 是本地 compose 服务, 不需要 SSH 远程部署
+      # Docker 环境: processor 是本地 compose 服务
+      # 尝试创建 tunnel (可选, 失败不阻塞)
+      setup_tunnel || true
       log "CF Worker 部署完成。processor 由 docker compose 管理"
-      log "deploy 容器退出后, docker compose 会自动启动 processor"
+      if [ "$TUNNEL_CONFIGURED" -eq 1 ]; then
+        log "启动所有服务: docker compose --profile tunnel up -d"
+      else
+        log "deploy 容器退出后, docker compose 会自动启动 processor"
+      fi
     elif [ -n "${VPS_SSH:-}" ]; then
       deploy_vps
     else

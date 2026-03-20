@@ -30,6 +30,8 @@ For Docker deployment, create a token at [Cloudflare API Tokens](https://dash.cl
 - Account / D1: Edit
 - Account / R2: Edit
 - Account / Account Settings: Read
+- Account / Cloudflare Tunnel: Edit *(only if using tunnel)*
+- Zone / DNS: Edit *(only if using tunnel with custom domain)*
 
 ## Method 1: Docker Deployment (Recommended)
 
@@ -42,20 +44,21 @@ cd tg-s3
 cp .env.example .env
 ```
 
-Edit `.env` with required values:
+Edit `.env` with required values (only 2 required):
 
 ```bash
 # Required
 TG_BOT_TOKEN=123456:ABC-DEF...
 DEFAULT_CHAT_ID=-1001234567890
-S3_ACCESS_KEY_ID=your-access-key
-S3_SECRET_ACCESS_KEY=your-secret-key
-BEARER_TOKEN=a-random-secret-string
+
+# Docker deployment
 CLOUDFLARE_API_TOKEN=your-cf-api-token
 
-# Optional: custom domain
+# Optional: custom domain (also enables automatic tunnel creation)
 CF_CUSTOM_DOMAIN=s3.example.com
 ```
+
+All other credentials (S3 keys, BEARER_TOKEN, VPS_SECRET) are **auto-generated** during deployment.
 
 Deploy:
 
@@ -64,14 +67,45 @@ docker compose up -d
 ```
 
 This starts two services:
-- **deploy** -- Pushes the Worker to Cloudflare (runs once, then exits)
+- **deploy** -- Pushes the Worker to Cloudflare, creates D1 credentials, auto-generates secrets (runs once, then exits)
 - **processor** -- Handles large files and media processing (stays running)
 
-Check deployment logs:
+S3 credentials are displayed in the deploy logs. Save them for client configuration:
 
 ```bash
 docker compose logs deploy
 ```
+
+### Cloudflare Tunnel (Recommended for VPS)
+
+Cloudflare Tunnel creates a secure connection between the processor and CF Workers without exposing ports publicly.
+
+**Automatic setup** (requires `CF_CUSTOM_DOMAIN` in `.env`):
+
+`deploy.sh` auto-creates a tunnel and configures DNS. The tunnel hostname will be `vps.<your-custom-domain>`. Start with:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+**Manual setup** (without custom domain):
+
+1. Go to CF Dashboard > Zero Trust > Networks > Tunnels
+2. Create a tunnel named `tg-s3`
+3. Add a public hostname pointing to `http://processor:3000`
+4. Copy the tunnel token to `.env`:
+
+```bash
+CF_TUNNEL_TOKEN=eyJhIjo...
+```
+
+5. Start with tunnel profile:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+The tunnel replaces `VPS_URL` -- the Worker reaches the processor through Cloudflare's network instead of a direct connection.
 
 ### Updating
 
@@ -87,7 +121,7 @@ docker compose up -d --build
 ```bash
 npm install
 cp .env.example .env
-# Edit .env
+# Edit .env (only TG_BOT_TOKEN and DEFAULT_CHAT_ID required)
 
 ./deploy.sh --cf-only
 ```
@@ -96,9 +130,11 @@ The script will:
 1. Validate configuration
 2. Create D1 database and initialize schema
 3. Create R2 bucket with lifecycle policy
-4. Set all secrets in Cloudflare
-5. Deploy the Worker
-6. Register Telegram Bot webhook
+4. Auto-generate BEARER_TOKEN and VPS_SECRET
+5. Create initial admin S3 credential in D1
+6. Set all secrets in Cloudflare
+7. Deploy the Worker
+8. Register Telegram Bot webhook
 
 ### With VPS (Standard Tier)
 
@@ -109,7 +145,7 @@ VPS_SSH=user@your-vps-ip
 VPS_DEPLOY_DIR=/opt/tg-s3
 VPS_PORT=3000
 VPS_URL=https://vps.example.com:3000
-VPS_SECRET=a-random-vps-secret
+# VPS_SECRET is auto-generated if not set
 ```
 
 Then deploy everything:
@@ -132,10 +168,14 @@ The VPS deployment will:
 
 ## Post-Deployment
 
+### S3 Credentials
+
+S3 credentials are shown once during deployment. You can also manage credentials (create, revoke, set per-bucket permissions) in the Mini App's **Keys** tab.
+
 ### Verify S3 Access
 
 ```bash
-# AWS CLI
+# AWS CLI (use credentials from deploy output)
 aws --endpoint-url https://your-worker.workers.dev s3 ls
 aws --endpoint-url https://your-worker.workers.dev s3 mb s3://test
 aws --endpoint-url https://your-worker.workers.dev s3 cp file.txt s3://test/
@@ -182,4 +222,4 @@ Send `/miniapp` to the bot, or access `https://your-worker.workers.dev/miniapp` 
 ### VPS processor not reachable
 - Check container: `docker compose logs processor`
 - Verify port is open: `curl http://localhost:3000/health`
-- Ensure VPS_URL is accessible from Cloudflare Workers
+- Consider using Cloudflare Tunnel instead of direct port exposure

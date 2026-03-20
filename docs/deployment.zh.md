@@ -30,6 +30,8 @@ Docker 部署需要在 [Cloudflare API Tokens](https://dash.cloudflare.com/profi
 - Account / D1: Edit
 - Account / R2: Edit
 - Account / Account Settings: Read
+- Account / Cloudflare Tunnel: Edit *（仅使用 tunnel 时需要）*
+- Zone / DNS: Edit *（仅使用 tunnel 配合自定义域名时需要）*
 
 ## 方法一：Docker 部署（推荐）
 
@@ -42,20 +44,21 @@ cd tg-s3
 cp .env.example .env
 ```
 
-编辑 `.env`，填写必要的值：
+编辑 `.env`，仅需填写 2 项必填值：
 
 ```bash
 # 必填
 TG_BOT_TOKEN=123456:ABC-DEF...
 DEFAULT_CHAT_ID=-1001234567890
-S3_ACCESS_KEY_ID=your-access-key
-S3_SECRET_ACCESS_KEY=your-secret-key
-BEARER_TOKEN=a-random-secret-string
+
+# Docker 部署
 CLOUDFLARE_API_TOKEN=your-cf-api-token
 
-# 可选：自定义域名
+# 可选：自定义域名（同时启用 tunnel 自动创建）
 CF_CUSTOM_DOMAIN=s3.example.com
 ```
+
+其他凭据（S3 密钥、BEARER_TOKEN、VPS_SECRET）均在部署时**自动生成**。
 
 部署：
 
@@ -64,14 +67,45 @@ docker compose up -d
 ```
 
 这将启动两个服务：
-- **deploy** -- 将 Worker 推送到 Cloudflare（运行一次后退出）
+- **deploy** -- 将 Worker 推送到 Cloudflare，创建 D1 凭据，自动生成密钥（运行一次后退出）
 - **processor** -- 处理大文件和媒体（持续运行）
 
-查看部署日志：
+S3 凭据会在部署日志中显示，请保存用于客户端配置：
 
 ```bash
 docker compose logs deploy
 ```
+
+### Cloudflare Tunnel（推荐用于 VPS）
+
+Cloudflare Tunnel 在 processor 和 CF Worker 之间建立安全连接，无需暴露公网端口。
+
+**自动配置**（需要在 `.env` 中设置 `CF_CUSTOM_DOMAIN`）：
+
+`deploy.sh` 会自动创建 tunnel 并配置 DNS。tunnel 域名为 `vps.<你的自定义域名>`。启动命令：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+**手动配置**（无自定义域名时）：
+
+1. 进入 CF Dashboard > Zero Trust > Networks > Tunnels
+2. 创建名为 `tg-s3` 的 tunnel
+3. 添加公共主机名，指向 `http://processor:3000`
+4. 将 tunnel token 复制到 `.env`：
+
+```bash
+CF_TUNNEL_TOKEN=eyJhIjo...
+```
+
+5. 使用 tunnel profile 启动：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Tunnel 替代了 `VPS_URL`，Worker 通过 Cloudflare 网络访问 processor，而非直接连接。
 
 ### 更新
 
@@ -87,7 +121,7 @@ docker compose up -d --build
 ```bash
 npm install
 cp .env.example .env
-# 编辑 .env
+# 编辑 .env（仅需 TG_BOT_TOKEN 和 DEFAULT_CHAT_ID）
 
 ./deploy.sh --cf-only
 ```
@@ -96,9 +130,11 @@ cp .env.example .env
 1. 验证配置
 2. 创建 D1 数据库并初始化 schema
 3. 创建 R2 存储桶并设置生命周期策略
-4. 在 Cloudflare 中设置所有 secrets
-5. 部署 Worker
-6. 注册 Telegram Bot webhook
+4. 自动生成 BEARER_TOKEN 和 VPS_SECRET
+5. 在 D1 中创建初始 admin S3 凭据
+6. 在 Cloudflare 中设置所有 secrets
+7. 部署 Worker
+8. 注册 Telegram Bot webhook
 
 ### 配合 VPS（标准层级）
 
@@ -109,7 +145,7 @@ VPS_SSH=user@your-vps-ip
 VPS_DEPLOY_DIR=/opt/tg-s3
 VPS_PORT=3000
 VPS_URL=https://vps.example.com:3000
-VPS_SECRET=a-random-vps-secret
+# VPS_SECRET 未设置时自动生成
 ```
 
 然后部署全部组件：
@@ -132,10 +168,14 @@ VPS 部署将执行以下操作：
 
 ## 部署后验证
 
+### S3 凭据
+
+S3 凭据在部署时显示一次。之后可在 Mini App 的 **Keys** 标签页中管理凭据（创建、撤销、设置单桶权限）。
+
 ### 验证 S3 访问
 
 ```bash
-# AWS CLI
+# AWS CLI（使用部署输出中的凭据）
 aws --endpoint-url https://your-worker.workers.dev s3 ls
 aws --endpoint-url https://your-worker.workers.dev s3 mb s3://test
 aws --endpoint-url https://your-worker.workers.dev s3 cp file.txt s3://test/
@@ -182,4 +222,4 @@ rclone ls tgs3:default
 ### VPS processor 不可达
 - 检查容器：`docker compose logs processor`
 - 验证端口是否开放：`curl http://localhost:3000/health`
-- 确保 VPS_URL 可从 Cloudflare Workers 访问
+- 考虑使用 Cloudflare Tunnel 代替直接端口暴露

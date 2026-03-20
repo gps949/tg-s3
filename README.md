@@ -18,6 +18,8 @@ TG-S3 turns Telegram into an S3-compatible object storage backend. Files are sto
 - **File sharing** -- Password-protected share links with expiry, download limits, and inline preview
 - **Large file support** -- Files up to 2GB via optional VPS proxy with Local Bot API
 - **Media processing** -- Image conversion (HEIC/WebP), video transcoding, Live Photo handling via VPS
+- **Multi-credential auth** -- D1-backed credential management with per-bucket and per-operation permissions
+- **Cloudflare Tunnel** -- Secure VPS connectivity without exposing public ports
 - **Multi-language** -- Mini App supports English, Chinese, Japanese, and French
 - **Zero cost entry** -- Core functionality runs entirely on Cloudflare's free tier
 
@@ -59,11 +61,14 @@ Share Links ────┘         ▼
 git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env: only TG_BOT_TOKEN, DEFAULT_CHAT_ID, and CLOUDFLARE_API_TOKEN needed
 docker compose up -d
+
+# With Cloudflare Tunnel (recommended, no open port needed):
+docker compose --profile tunnel up -d
 ```
 
-The `deploy` service pushes the Worker to Cloudflare and exits. The `processor` service stays running for large file and media support.
+The `deploy` service pushes the Worker to Cloudflare, auto-generates secrets, and creates the first S3 credential. Check `docker compose logs deploy` for credentials.
 
 ### Option 2: Manual deployment
 
@@ -72,9 +77,9 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env: only TG_BOT_TOKEN and DEFAULT_CHAT_ID required
 
-# Deploy Cloudflare Worker
+# Deploy Cloudflare Worker (auto-generates all secrets)
 ./deploy.sh --cf-only
 
 # (Optional) Deploy VPS processor
@@ -111,7 +116,7 @@ rclone ls tgs3:default
 | Listing | ListObjectsV2, ListObjects (v1) |
 | Multipart | CreateMultipartUpload, UploadPart, UploadPartCopy, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads |
 | Buckets | ListBuckets, CreateBucket, DeleteBucket, HeadBucket, GetBucketLocation, GetBucketVersioning |
-| Auth | AWS SigV4, Presigned URLs, Bearer token |
+| Auth | AWS SigV4 (multi-credential), Presigned URLs, Bearer token, Telegram initData |
 
 **Not supported (by design):** versioning, server-side encryption, lifecycle policies, ACLs, cross-region replication. See [docs/S3-COMPAT.md](docs/S3-COMPAT.md) for details.
 

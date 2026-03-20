@@ -7,10 +7,10 @@ export function verifyBearer(request: Request, env: Env): boolean | Promise<bool
   const parts = auth.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') return false;
 
-  // Direct bearer token match (timing-safe to prevent side-channel leaks)
-  if (parts[1].length === env.BEARER_TOKEN.length && timingSafeEqual(parts[1], env.BEARER_TOKEN)) return true;
+  // Legacy: direct bearer token match (for backwards compat with existing deployments)
+  if (env.BEARER_TOKEN && parts[1].length === env.BEARER_TOKEN.length && timingSafeEqual(parts[1], env.BEARER_TOKEN)) return true;
 
-  // Fallback: validate as Telegram WebApp initData (HMAC-SHA256)
+  // Primary: validate as Telegram WebApp initData (HMAC-SHA256)
   return verifyTelegramInitData(parts[1], env.TG_BOT_TOKEN);
 }
 

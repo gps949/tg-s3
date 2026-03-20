@@ -1,7 +1,7 @@
-import type { Env, S3Request, S3Operation, AuthFailure } from './types';
+import type { Env, S3Request, S3Operation, AuthFailure, AuthContext } from './types';
 import { parseS3Path } from './utils/path';
 import { verifyBearer } from './auth/bearer';
-import { verifySignature } from './auth/sigv4';
+import { verifySignature, type CredentialResolver } from './auth/sigv4';
 import { generatePresignedUrl } from './auth/presigned';
 import { errorResponse } from './xml/builder';
 import { timingSafeEqual } from './utils/crypto';
@@ -32,10 +32,11 @@ export default {
       return handleCors();
     }
 
-    // Bot webhook (verified by secret_token header)
+    // Bot webhook (verified by secret_token derived from TG_BOT_TOKEN)
     if (path === '/bot/webhook' && request.method === 'POST') {
       const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
-      if (!timingSafeEqual(secret, env.BEARER_TOKEN)) {
+      const expectedSecret = await deriveWebhookSecret(env.TG_BOT_TOKEN);
+      if (!timingSafeEqual(secret, expectedSecret)) {
         return new Response('Unauthorized', { status: 401 });
       }
       return handleWebhook(request, env);
@@ -55,31 +56,31 @@ export default {
 
     // Presigned URL generation API (requires auth)
     if (path === '/api/presign' && request.method === 'POST') {
-      const authErr = await authenticate(request, url, env);
-      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      const authResult = await authenticate(request, url, env);
+      if (isAuthFailure(authResult)) return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
       return addCorsHeaders(await handlePresignApi(request, url, env));
     }
 
     // Share management API (requires auth)
     if (path.startsWith('/api/shares')) {
-      const authErr = await authenticate(request, url, env);
-      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      const authResult = await authenticate(request, url, env);
+      if (isAuthFailure(authResult)) return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
       return addCorsHeaders(await handleShareApi(request, url, env));
     }
 
     // Mini App API (requires auth)
     if (path.startsWith('/api/miniapp/')) {
-      const authErr = await authenticate(request, url, env);
-      if (authErr) return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      const authResult = await authenticate(request, url, env);
+      if (isAuthFailure(authResult)) return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
       return addCorsHeaders(await handleMiniAppApi(request, url, env, ctx));
     }
 
     // S3 API
     try {
-      // Authenticate (returns specific S3 error codes)
-      const authErr = await authenticate(request, url, env);
-      if (authErr) {
-        return addCorsHeaders(errorResponse(authErr.status, authErr.code, authErr.message));
+      // Authenticate (returns AuthContext on success, AuthFailure on failure)
+      const authResult = await authenticate(request, url, env);
+      if (isAuthFailure(authResult)) {
+        return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
       }
 
       const { bucket, key } = parseS3Path(url);
@@ -106,6 +107,12 @@ export default {
           return addCorsHeaders(errorResponse(501, 'NotImplemented', `The ${subresource} sub-resource is not supported.`));
         }
         return addCorsHeaders(errorResponse(400, 'InvalidRequest', 'Could not determine S3 operation.'));
+      }
+
+      // Authorization: check credential permissions for this operation + bucket
+      const authzErr = authorize(authResult, bucket, operation);
+      if (authzErr) {
+        return addCorsHeaders(errorResponse(authzErr.status, authzErr.code, authzErr.message));
       }
 
       // S3 limits key length to 1024 bytes (UTF-8 encoded); validate on write operations
@@ -217,10 +224,39 @@ export default {
   },
 };
 
-async function authenticate(request: Request, url: URL, env: Env): Promise<AuthFailure | null> {
+const ADMIN_CONTEXT: AuthContext = { accessKeyId: '__bearer__', permission: 'admin', buckets: ['*'] };
+
+function buildCredentialResolver(env: Env): CredentialResolver {
+  return async (accessKeyId: string) => {
+    // 1. Lookup from D1 credentials table
+    const store = new MetadataStore(env);
+    const cred = await store.getCredentialByAccessKey(accessKeyId);
+    if (cred) {
+      // Update last_used_at in background (don't block auth)
+      store.touchCredentialLastUsed(accessKeyId).catch(() => {});
+      return {
+        secretKey: cred.secret_access_key,
+        context: {
+          accessKeyId: cred.access_key_id,
+          permission: cred.permission as AuthContext['permission'],
+          buckets: cred.buckets === '*' ? ['*'] : cred.buckets.split(',').map(b => b.trim()),
+        },
+      };
+    }
+    // 2. Legacy fallback: env vars (for backwards compat during migration)
+    if (env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY && accessKeyId === env.S3_ACCESS_KEY_ID) {
+      return { secretKey: env.S3_SECRET_ACCESS_KEY, context: { ...ADMIN_CONTEXT, accessKeyId } };
+    }
+    return null;
+  };
+}
+
+async function authenticate(request: Request, url: URL, env: Env): Promise<AuthFailure | AuthContext> {
+  const resolve = buildCredentialResolver(env);
+
   // Check for presigned URL auth
   if (url.searchParams.has('X-Amz-Algorithm')) {
-    return verifySignature(request, url, env);
+    return verifySignature(request, url, resolve);
   }
 
   // Check Authorization header
@@ -233,16 +269,42 @@ async function authenticate(request: Request, url: URL, env: Env): Promise<AuthF
   if (auth.startsWith('Bearer ')) {
     const valid = await verifyBearer(request, env);
     return valid
-      ? null
+      ? ADMIN_CONTEXT
       : { status: 403, code: 'AccessDenied', message: 'Invalid bearer token.' };
   }
 
   // SigV4 auth (returns specific error codes)
   if (auth.startsWith('AWS4-HMAC-SHA256')) {
-    return verifySignature(request, url, env);
+    return verifySignature(request, url, resolve);
   }
 
   return { status: 403, code: 'AccessDenied', message: 'Unsupported authentication scheme.' };
+}
+
+function isAuthFailure(result: AuthFailure | AuthContext): result is AuthFailure {
+  return 'code' in result && 'status' in result;
+}
+
+/** Check if the credential is authorized for the given operation on the bucket */
+function authorize(auth: AuthContext, bucket: string, operation: S3Operation): AuthFailure | null {
+  // Check bucket access
+  if (!auth.buckets.includes('*') && bucket && !auth.buckets.includes(bucket)) {
+    return { status: 403, code: 'AccessDenied', message: `Access Denied: no permission for bucket '${bucket}'.` };
+  }
+  // Check operation permission
+  if (auth.permission === 'admin') return null;
+  const readOps: S3Operation[] = ['GetObject', 'HeadObject', 'ListObjectsV2', 'ListObjects', 'ListBuckets', 'HeadBucket', 'GetBucketLocation', 'GetBucketVersioning', 'ListParts', 'ListMultipartUploads'];
+  if (auth.permission === 'readonly' && !readOps.includes(operation)) {
+    return { status: 403, code: 'AccessDenied', message: 'Access Denied: read-only credential.' };
+  }
+  // readwrite: allow everything except bucket create/delete
+  if (auth.permission === 'readwrite') {
+    const bucketAdminOps: S3Operation[] = ['CreateBucket', 'DeleteBucket'];
+    if (bucketAdminOps.includes(operation)) {
+      return { status: 403, code: 'AccessDenied', message: 'Access Denied: insufficient permission for bucket management.' };
+    }
+  }
+  return null;
 }
 
 // S3 sub-resource query parameters that indicate a distinct operation.
@@ -509,6 +571,67 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json({ url: presignedUrl });
   }
 
+  // GET /api/miniapp/credentials - list all credentials (secrets masked)
+  if (path === '/api/miniapp/credentials' && method === 'GET') {
+    const creds = await store.listCredentials();
+    const masked = creds.map(c => ({
+      ...c,
+      secret_access_key: c.secret_access_key.slice(0, 4) + '****' + c.secret_access_key.slice(-4),
+    }));
+    return Response.json(masked);
+  }
+
+  // POST /api/miniapp/credential - create new credential
+  if (path === '/api/miniapp/credential' && method === 'POST') {
+    let body: { name?: string; buckets?: string; permission?: string };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    const permission = body.permission || 'readwrite';
+    if (!['admin', 'readwrite', 'readonly'].includes(permission)) {
+      return Response.json({ error: 'permission must be admin, readwrite, or readonly' }, { status: 400 });
+    }
+    // Generate random access key (20 chars) and secret key (40 chars)
+    const akBuf = new Uint8Array(15);
+    const skBuf = new Uint8Array(30);
+    crypto.getRandomValues(akBuf);
+    crypto.getRandomValues(skBuf);
+    const toBase62 = (buf: Uint8Array) => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      return Array.from(buf).map(b => chars[b % 62]).join('');
+    };
+    const accessKeyId = 'TGS3' + toBase62(akBuf).slice(0, 16);
+    const secretAccessKey = toBase62(skBuf);
+    await store.createCredential({
+      accessKeyId,
+      secretAccessKey,
+      name: body.name || '',
+      buckets: body.buckets || '*',
+      permission,
+    });
+    // Return full credential (only time secret is shown in plain text)
+    return Response.json({ access_key_id: accessKeyId, secret_access_key: secretAccessKey, name: body.name || '', buckets: body.buckets || '*', permission });
+  }
+
+  // PATCH /api/miniapp/credential?accessKeyId=... - update credential
+  if (path === '/api/miniapp/credential' && method === 'PATCH') {
+    const accessKeyId = url.searchParams.get('accessKeyId');
+    if (!accessKeyId) return Response.json({ error: 'accessKeyId required' }, { status: 400 });
+    let body: { name?: string; buckets?: string; permission?: string; is_active?: number };
+    try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+    if (body.permission && !['admin', 'readwrite', 'readonly'].includes(body.permission)) {
+      return Response.json({ error: 'permission must be admin, readwrite, or readonly' }, { status: 400 });
+    }
+    const ok = await store.updateCredential(accessKeyId, body);
+    return Response.json({ ok });
+  }
+
+  // DELETE /api/miniapp/credential?accessKeyId=... - delete credential
+  if (path === '/api/miniapp/credential' && method === 'DELETE') {
+    const accessKeyId = url.searchParams.get('accessKeyId');
+    if (!accessKeyId) return Response.json({ error: 'accessKeyId required' }, { status: 400 });
+    const ok = await store.deleteCredential(accessKeyId);
+    return Response.json({ ok });
+  }
+
   return Response.json({ error: 'Not found' }, { status: 404 });
 }
 
@@ -554,4 +677,15 @@ function addCorsHeaders(response: Response): Response {
     statusText: response.statusText,
     headers: newHeaders,
   });
+}
+
+/** Derive a deterministic webhook secret from the bot token (no separate env var needed) */
+async function deriveWebhookSecret(botToken: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(botToken), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode('tg-s3-webhook'));
+  // Hex-encoded, truncated to 64 chars (valid for Telegram secret_token: A-Za-z0-9_-)
+  return Array.from(new Uint8Array(sig), b => b.toString(16).padStart(2, '0')).join('');
 }

@@ -30,6 +30,8 @@ Docker デプロイの場合、[Cloudflare API Tokens](https://dash.cloudflare.c
 - Account / D1: Edit
 - Account / R2: Edit
 - Account / Account Settings: Read
+- Account / Cloudflare Tunnel: Edit *（トンネル使用時のみ）*
+- Zone / DNS: Edit *（カスタムドメインでトンネル使用時のみ）*
 
 ## 方法 1: Docker デプロイ（推奨）
 
@@ -42,20 +44,21 @@ cd tg-s3
 cp .env.example .env
 ```
 
-`.env` に必要な値を記入します：
+`.env` に必要な値を記入します（必須項目は 2 つのみ）：
 
 ```bash
 # 必須
 TG_BOT_TOKEN=123456:ABC-DEF...
 DEFAULT_CHAT_ID=-1001234567890
-S3_ACCESS_KEY_ID=your-access-key
-S3_SECRET_ACCESS_KEY=your-secret-key
-BEARER_TOKEN=a-random-secret-string
+
+# Docker デプロイ
 CLOUDFLARE_API_TOKEN=your-cf-api-token
 
-# オプション：カスタムドメイン
+# オプション：カスタムドメイン（トンネルの自動作成も有効化）
 CF_CUSTOM_DOMAIN=s3.example.com
 ```
+
+その他の認証情報（S3 キー、BEARER_TOKEN、VPS_SECRET）はデプロイ時に**自動生成**されます。
 
 デプロイ：
 
@@ -64,14 +67,45 @@ docker compose up -d
 ```
 
 2 つのサービスが起動します：
-- **deploy** -- Worker を Cloudflare にプッシュ（1 回実行後に終了）
+- **deploy** -- Worker を Cloudflare にプッシュ、D1 認証情報を作成、シークレットを自動生成（1 回実行後に終了）
 - **processor** -- 大容量ファイルとメディア処理を担当（常駐）
 
-デプロイログの確認：
+S3 認証情報はデプロイログに表示されます。クライアント設定のために保存してください：
 
 ```bash
 docker compose logs deploy
 ```
+
+### Cloudflare Tunnel（VPS 向け推奨）
+
+Cloudflare Tunnel はプロセッサと CF Worker 間に安全な接続を確立し、ポートの公開が不要になります。
+
+**自動設定**（`.env` に `CF_CUSTOM_DOMAIN` が必要）：
+
+`deploy.sh` がトンネルを自動作成し DNS を設定します。トンネルのホスト名は `vps.<カスタムドメイン>` になります。起動：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+**手動設定**（カスタムドメインなし）：
+
+1. CF Dashboard > Zero Trust > Networks > Tunnels に移動
+2. `tg-s3` という名前のトンネルを作成
+3. `http://processor:3000` を指すパブリックホスト名を追加
+4. トンネルトークンを `.env` にコピー：
+
+```bash
+CF_TUNNEL_TOKEN=eyJhIjo...
+```
+
+5. tunnel プロファイルで起動：
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+トンネルは `VPS_URL` の代わりとなり、Worker は直接接続ではなく Cloudflare ネットワーク経由でプロセッサにアクセスします。
 
 ### アップデート
 
@@ -87,7 +121,7 @@ docker compose up -d --build
 ```bash
 npm install
 cp .env.example .env
-# .env を編集
+# .env を編集（TG_BOT_TOKEN と DEFAULT_CHAT_ID のみ必須）
 
 ./deploy.sh --cf-only
 ```
@@ -96,9 +130,11 @@ cp .env.example .env
 1. 設定の検証
 2. D1 データベースの作成とスキーマ初期化
 3. R2 バケットの作成とライフサイクルポリシーの設定
-4. Cloudflare へのシークレット設定
-5. Worker のデプロイ
-6. Telegram Bot Webhook の登録
+4. BEARER_TOKEN と VPS_SECRET の自動生成
+5. D1 に初期 admin S3 認証情報を作成
+6. Cloudflare へのシークレット設定
+7. Worker のデプロイ
+8. Telegram Bot Webhook の登録
 
 ### VPS 併用（Standard 構成）
 
@@ -109,7 +145,7 @@ VPS_SSH=user@your-vps-ip
 VPS_DEPLOY_DIR=/opt/tg-s3
 VPS_PORT=3000
 VPS_URL=https://vps.example.com:3000
-VPS_SECRET=a-random-vps-secret
+# VPS_SECRET は未設定時に自動生成
 ```
 
 すべてをデプロイ：
@@ -132,10 +168,14 @@ VPS デプロイでは以下が実行されます：
 
 ## デプロイ後の確認
 
+### S3 認証情報
+
+S3 認証情報はデプロイ時に 1 回だけ表示されます。以後は Mini App の **Keys** タブで認証情報を管理できます（作成、無効化、バケット別権限設定）。
+
 ### S3 アクセスの確認
 
 ```bash
-# AWS CLI
+# AWS CLI（デプロイ出力の認証情報を使用）
 aws --endpoint-url https://your-worker.workers.dev s3 ls
 aws --endpoint-url https://your-worker.workers.dev s3 mb s3://test
 aws --endpoint-url https://your-worker.workers.dev s3 cp file.txt s3://test/
@@ -182,4 +222,4 @@ Bot に `/miniapp` を送信するか、`https://your-worker.workers.dev/miniapp
 ### VPS プロセッサに接続できない
 - コンテナの確認：`docker compose logs processor`
 - ポートの確認：`curl http://localhost:3000/health`
-- VPS_URL が Cloudflare Workers からアクセス可能であることを確認
+- 直接ポート公開の代わりに Cloudflare Tunnel の使用を検討

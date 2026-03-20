@@ -18,6 +18,8 @@ TG-S3 は Telegram を S3 互換オブジェクトストレージバックエン
 - **ファイル共有** -- パスワード保護、有効期限、ダウンロード制限、インラインプレビュー付き共有リンク
 - **大容量ファイル対応** -- オプションの VPS プロキシと Local Bot API により最大 2GB
 - **メディア処理** -- VPS 経由で画像変換 (HEIC/WebP)、動画トランスコード、Live Photo 処理
+- **マルチ認証情報** -- D1 ベースの認証情報管理、バケット別・操作別の権限設定
+- **Cloudflare Tunnel** -- パブリックポートを公開せずに VPS へ安全に接続
 - **多言語対応** -- Mini App は英語、中国語、日本語、フランス語をサポート
 - **ゼロコストで開始** -- コア機能は Cloudflare 無料プランのみで動作
 
@@ -59,11 +61,14 @@ Mini App ─────────┤         │                R2 (キャッ
 git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
-# .env にクレデンシャルを入力
+# .env を編集: TG_BOT_TOKEN、DEFAULT_CHAT_ID、CLOUDFLARE_API_TOKEN のみ必要
 docker compose up -d
+
+# Cloudflare Tunnel 使用時（推奨、ポート公開不要）:
+docker compose --profile tunnel up -d
 ```
 
-`deploy` サービスが Worker を Cloudflare にプッシュして終了します。`processor` サービスは大容量ファイルとメディア処理のために常駐します。
+`deploy` サービスが Worker を Cloudflare にプッシュし、シークレットを自動生成、最初の S3 認証情報を作成します。`docker compose logs deploy` で認証情報を確認してください。
 
 ### 方法 2: 手動デプロイ
 
@@ -72,9 +77,9 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env
-# .env にクレデンシャルを入力
+# .env を編集: TG_BOT_TOKEN と DEFAULT_CHAT_ID のみ必要
 
-# Cloudflare Worker をデプロイ
+# Cloudflare Worker をデプロイ（すべてのシークレットを自動生成）
 ./deploy.sh --cf-only
 
 # （オプション）VPS プロセッサをデプロイ

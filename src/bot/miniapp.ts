@@ -109,6 +109,17 @@ body {
   padding: 16px; margin: 8px 0; text-align: center;
 }
 .auth-error h3 { color: var(--destructive); margin-bottom: 8px; }
+.cred-item { padding: 12px; margin: 6px 0; border-radius: 10px; background: var(--secondary-bg); }
+.cred-name { font-weight: 600; font-size: 14px; }
+.cred-key { font-family: monospace; font-size: 12px; word-break: break-all; color: var(--hint); margin-top: 4px; }
+.cred-meta { font-size: 12px; color: var(--hint); margin-top: 4px; line-height: 1.6; }
+.cred-actions { display: flex; gap: 6px; margin-top: 8px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge-active { background: color-mix(in srgb, #4caf50 15%, transparent); color: #4caf50; }
+.badge-inactive { background: color-mix(in srgb, var(--destructive) 15%, transparent); color: var(--destructive); }
+.badge-perm { background: color-mix(in srgb, var(--link) 15%, transparent); color: var(--link); }
+.secret-reveal { background: var(--bg); border: 1px solid var(--secondary-bg); border-radius: 8px; padding: 12px; margin: 12px 0; word-break: break-all; font-family: monospace; font-size: 13px; }
+.secret-warning { background: color-mix(in srgb, #ff9800 10%, transparent); border: 1px solid #ff9800; border-radius: 8px; padding: 10px; margin: 8px 0; font-size: 13px; color: #e65100; }
 </style>
 </head>
 <body>
@@ -128,11 +139,13 @@ body {
   <div class="tab active" data-view="buckets" id="tabBucket"></div>
   <div class="tab" data-view="files" id="tabFiles"></div>
   <div class="tab" data-view="shares" id="tabShares"></div>
+  <div class="tab" data-view="keys" id="tabKeys"></div>
 </div>
 
 <div id="bucketsView" class="view active"></div>
 <div id="filesView" class="view"></div>
 <div id="sharesView" class="view"></div>
+<div id="keysView" class="view"></div>
 
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal" id="modalContent"></div>
@@ -166,6 +179,7 @@ function setLang(lang) {
     if (view === 'buckets') loadBuckets();
     else if (view === 'files' && currentBucket) loadFiles();
     else if (view === 'shares') loadShares();
+    else if (view === 'keys') loadKeys();
   }
 }
 
@@ -174,6 +188,7 @@ function applyStaticLabels() {
   document.getElementById('tabBucket').textContent = t('tab_bucket');
   document.getElementById('tabFiles').textContent = t('tab_files');
   document.getElementById('tabShares').textContent = t('tab_shares');
+  document.getElementById('tabKeys').textContent = t('tab_keys');
   document.title = t('app_title');
 }
 
@@ -228,6 +243,7 @@ function setupTabs() {
       document.getElementById(viewId).classList.add('active');
       window.scrollTo(0, 0);
       if (tab.dataset.view === 'shares') loadShares();
+      if (tab.dataset.view === 'keys') loadKeys();
     });
   });
 }
@@ -261,7 +277,7 @@ async function apiFetch(path, opts = {}) {
 }
 
 function showAuthError() {
-  const views = ['bucketsView', 'filesView', 'sharesView'];
+  const views = ['bucketsView', 'filesView', 'sharesView', 'keysView'];
   for (const id of views) {
     const el = document.getElementById(id);
     if (el.classList.contains('active')) {
@@ -1376,6 +1392,144 @@ document.addEventListener('drop', function(e) {
     toast(t('switch_to_files'));
   }
 });
+
+// ── Keys (Credential management) ─────────────────────────────────────
+async function loadKeys() {
+  var el = document.getElementById('keysView');
+  showSkeleton(el, 3);
+  try {
+    var creds = await apiFetch('/api/miniapp/credentials');
+    var createBtn = '<div style="padding:4px 0 8px"><button class="btn btn-sm" onclick="showCreateKey()">' + esc(t('key_create_btn')) + '</button></div>';
+    if (creds.length === 0) {
+      el.innerHTML = createBtn +
+        '<div class="empty">' + esc(t('key_no_keys')) + '<br><small style="color:var(--hint)">' + esc(t('key_no_keys_hint')) + '</small></div>';
+      return;
+    }
+    el.innerHTML = createBtn + creds.map(function(c) {
+      var statusClass = c.status === 'active' ? 'badge-active' : 'badge-inactive';
+      var statusLabel = c.status === 'active' ? t('key_status_active') : t('key_status_inactive');
+      var toggleLabel = c.status === 'active' ? t('key_deactivate') : t('key_activate');
+      var lastUsed = c.last_used_at ? new Date(c.last_used_at).toLocaleString() : t('key_never_used');
+      var bucketsDisplay = c.buckets === '*' ? t('key_all_buckets') : esc(c.buckets);
+      return '<div class="cred-item">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div class="cred-name">' + esc(c.name) + '</div>' +
+          '<span class="badge ' + statusClass + '">' + esc(statusLabel) + '</span>' +
+        '</div>' +
+        '<div class="cred-key">' + esc(c.access_key_id) + '</div>' +
+        '<div class="cred-key">' + esc(t('key_secret_label')) + ': ' + esc(c.secret_access_key) + '</div>' +
+        '<div class="cred-meta">' +
+          '<span class="badge badge-perm">' + esc(c.permission) + '</span>' +
+          ' &middot; ' + esc(t('key_buckets_label')) + ': ' + bucketsDisplay +
+          '<br>' + esc(t('key_last_used')) + ': ' + esc(lastUsed) +
+        '</div>' +
+        '<div class="cred-actions">' +
+          '<button class="btn btn-sm btn-outline" onclick="toggleKeyStatus(\\'' + escJs(c.access_key_id) + '\\', \\'' + escJs(c.status === 'active' ? 'inactive' : 'active') + '\\')">' + esc(toggleLabel) + '</button>' +
+          '<button class="btn btn-sm btn-danger" onclick="confirmDeleteKey(\\'' + escJs(c.access_key_id) + '\\', \\'' + escJs(c.name) + '\\')">' + esc(t('delete')) + '</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    if (!authOk) return;
+    el.innerHTML = '<div class="empty">' + esc(t('load_failed', e.message)) + '<br><br><button class="btn btn-sm btn-outline" onclick="loadKeys()">' + esc(t('retry')) + '</button></div>';
+  }
+}
+
+function showCreateKey() {
+  showModal(
+    '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+    '<h3>' + esc(t('key_create_title')) + '</h3>' +
+    '<div class="form-group">' +
+      '<label>' + esc(t('key_name_label')) + '</label>' +
+      '<input type="text" id="keyName" placeholder="' + esc(t('key_name_placeholder')) + '">' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>' + esc(t('key_permission_label')) + '</label>' +
+      '<select id="keyPermission">' +
+        '<option value="admin">admin</option>' +
+        '<option value="readwrite" selected>readwrite</option>' +
+        '<option value="readonly">readonly</option>' +
+      '</select>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>' + esc(t('key_buckets_input_label')) + '</label>' +
+      '<input type="text" id="keyBuckets" value="*" placeholder="*">' +
+      '<div style="font-size:11px;color:var(--hint);margin-top:4px">' + esc(t('key_buckets_hint')) + '</div>' +
+    '</div>' +
+    '<button class="btn" style="width:100%;margin-top:8px" id="createKeyBtn" onclick="doCreateKey()">' + esc(t('create')) + '</button>'
+  );
+}
+
+async function doCreateKey() {
+  var name = (document.getElementById('keyName').value || '').trim();
+  if (!name) { toast(t('key_name_required')); return; }
+  var permission = document.getElementById('keyPermission').value;
+  var buckets = (document.getElementById('keyBuckets').value || '*').trim();
+  var btn = document.getElementById('createKeyBtn');
+  if (btn) { btn.disabled = true; btn.textContent = t('creating'); }
+  try {
+    var result = await apiFetch('/api/miniapp/credential', {
+      method: 'POST',
+      body: JSON.stringify({ name: name, permission: permission, buckets: buckets }),
+    });
+    showModal(
+      '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+      '<h3>' + esc(t('key_created_title')) + '</h3>' +
+      '<div class="form-group">' +
+        '<label>Access Key ID</label>' +
+        '<div class="secret-reveal">' + esc(result.access_key_id) + '</div>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label>Secret Access Key</label>' +
+        '<div class="secret-reveal">' + esc(result.secret_access_key) + '</div>' +
+      '</div>' +
+      '<div class="secret-warning">' + esc(t('key_secret_warning')) + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<button class="btn" style="flex:1" onclick="copyText(\\'' + escJs(result.access_key_id + '\\n' + result.secret_access_key) + '\\')">' + esc(t('key_copy_both')) + '</button>' +
+      '</div>'
+    );
+    loadKeys();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = t('create'); }
+    toast(t('create_failed', e.message));
+  }
+}
+
+async function toggleKeyStatus(accessKeyId, newStatus) {
+  try {
+    await apiFetch('/api/miniapp/credential', {
+      method: 'PATCH',
+      body: JSON.stringify({ access_key_id: accessKeyId, status: newStatus }),
+    });
+    toast(t('key_status_updated'));
+    loadKeys();
+  } catch (e) {
+    toast(t('key_update_failed', e.message));
+  }
+}
+
+function confirmDeleteKey(accessKeyId, name) {
+  showModal(
+    '<span class="modal-close" onclick="closeModal()">&times;</span>' +
+    '<h3>' + esc(t('key_delete_title')) + '</h3>' +
+    '<p style="margin:12px 0">' + esc(t('key_delete_confirm', name)) + '</p>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+      '<button class="btn btn-sm btn-outline" onclick="closeModal()">' + esc(t('cancel')) + '</button>' +
+      '<button class="btn btn-sm btn-danger" onclick="doDeleteKey(\\'' + escJs(accessKeyId) + '\\')">' + esc(t('delete')) + '</button>' +
+    '</div>'
+  );
+}
+
+async function doDeleteKey(accessKeyId) {
+  closeModal();
+  try {
+    await apiFetch('/api/miniapp/credential?access_key_id=' + encodeURIComponent(accessKeyId), { method: 'DELETE' });
+    toast(t('deleted'));
+    loadKeys();
+  } catch (e) {
+    toast(t('delete_failed', e.message));
+  }
+}
 </script>
 </body>
 </html>`;

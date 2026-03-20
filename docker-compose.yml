@@ -36,6 +36,21 @@ services:
         limits:
           memory: 2G
 
+  # Cloudflare Tunnel: 安全暴露 processor 给 CF Worker, 无需开放公网端口
+  # 启用方法: 在 .env 中设置 CF_TUNNEL_TOKEN, 然后:
+  #   docker compose --profile tunnel up -d
+  # 或由 deploy.sh 自动创建 (需要 CF_CUSTOM_DOMAIN)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    depends_on:
+      - processor
+    profiles:
+      - tunnel
+
   # Optional: Telegram Local Bot API Server for 2GB file support
   # telegram-bot-api:
   #   image: aiogram/telegram-bot-api:latest

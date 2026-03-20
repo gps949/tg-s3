@@ -18,6 +18,8 @@ TG-S3 将 Telegram 变成 S3 兼容的对象存储后端。文件作为 Telegram
 - **文件分享** -- 支持密码保护、过期时间、下载限制和在线预览的分享链接
 - **大文件支持** -- 通过可选的 VPS 代理和 Local Bot API 支持最大 2GB 文件
 - **媒体处理** -- 通过 VPS 实现图片转换 (HEIC/WebP)、视频转码、Live Photo 处理
+- **多凭据认证** -- 基于 D1 的凭据管理，支持按存储桶和操作设置权限
+- **Cloudflare Tunnel** -- 安全连接 VPS，无需暴露公网端口
 - **多语言** -- Mini App 支持英语、中文、日语和法语
 - **零成本起步** -- 核心功能完全运行在 Cloudflare 免费套餐上
 
@@ -59,11 +61,14 @@ Mini App ───────┤         │                R2 (缓存)
 git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
-# 编辑 .env 填入你的凭据
+# 编辑 .env: 仅需 TG_BOT_TOKEN、DEFAULT_CHAT_ID 和 CLOUDFLARE_API_TOKEN
 docker compose up -d
+
+# 使用 Cloudflare Tunnel（推荐，无需开放端口）:
+docker compose --profile tunnel up -d
 ```
 
-`deploy` 服务将 Worker 推送到 Cloudflare 后退出。`processor` 服务持续运行，提供大文件和媒体处理支持。
+`deploy` 服务将 Worker 推送到 Cloudflare，自动生成密钥并创建首个 S3 凭据。查看 `docker compose logs deploy` 获取凭据。
 
 ### 方式二：手动部署
 
@@ -72,9 +77,9 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env
-# 编辑 .env 填入你的凭据
+# 编辑 .env: 仅需 TG_BOT_TOKEN 和 DEFAULT_CHAT_ID
 
-# 部署 Cloudflare Worker
+# 部署 Cloudflare Worker（自动生成所有密钥）
 ./deploy.sh --cf-only
 
 # （可选）部署 VPS 处理器

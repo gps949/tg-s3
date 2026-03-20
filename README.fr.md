@@ -18,6 +18,8 @@ TG-S3 transforme Telegram en backend de stockage objet compatible S3. Les fichie
 - **Partage de fichiers** -- Liens de partage avec protection par mot de passe, expiration, limite de telechargements et apercu en ligne
 - **Support gros fichiers** -- Fichiers jusqu'a 2 Go via proxy VPS optionnel avec Local Bot API
 - **Traitement media** -- Conversion d'images (HEIC/WebP), transcodage video, gestion Live Photo via VPS
+- **Authentification multi-identifiants** -- Gestion des identifiants D1 avec permissions par bucket et par operation
+- **Cloudflare Tunnel** -- Connectivite VPS securisee sans exposer de ports publics
 - **Multilingue** -- Mini App en anglais, chinois, japonais et francais
 - **Zero cout initial** -- Les fonctionnalites principales fonctionnent entierement sur le plan gratuit Cloudflare
 
@@ -59,11 +61,14 @@ Liens partage ──┘         ▼
 git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
-# Editez .env avec vos identifiants
+# Editez .env : seuls TG_BOT_TOKEN, DEFAULT_CHAT_ID et CLOUDFLARE_API_TOKEN sont necessaires
 docker compose up -d
+
+# Avec Cloudflare Tunnel (recommande, pas de port a exposer) :
+docker compose --profile tunnel up -d
 ```
 
-Le service `deploy` pousse le Worker sur Cloudflare puis s'arrete. Le service `processor` reste actif pour le support des gros fichiers et le traitement media.
+Le service `deploy` pousse le Worker sur Cloudflare, genere automatiquement les secrets et cree le premier identifiant S3. Consultez `docker compose logs deploy` pour les identifiants.
 
 ### Option 2 : Deploiement manuel
 
@@ -72,9 +77,9 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 npm install
 cp .env.example .env
-# Editez .env avec vos identifiants
+# Editez .env : seuls TG_BOT_TOKEN et DEFAULT_CHAT_ID sont necessaires
 
-# Deployer le Cloudflare Worker
+# Deployer le Cloudflare Worker (genere automatiquement tous les secrets)
 ./deploy.sh --cf-only
 
 # (Optionnel) Deployer le processeur VPS

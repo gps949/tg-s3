@@ -110,6 +110,18 @@ CREATE TABLE IF NOT EXISTS share_password_attempts (
     PRIMARY KEY (token, ip)
 );
 
+-- S3 API 凭据: 多凭据 + 权限管理
+CREATE TABLE IF NOT EXISTS credentials (
+    access_key_id       TEXT    PRIMARY KEY,
+    secret_access_key   TEXT    NOT NULL,
+    name                TEXT    NOT NULL DEFAULT '',
+    buckets             TEXT    NOT NULL DEFAULT '*',
+    permission          TEXT    NOT NULL DEFAULT 'admin',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_used_at        TEXT,
+    is_active           INTEGER NOT NULL DEFAULT 1
+);
+
 -- [Phase 2 预留] 分块上传/下载实现时需要的 objects 表扩展:
 -- ALTER TABLE objects ADD COLUMN is_chunked INTEGER NOT NULL DEFAULT 0;
 -- ALTER TABLE objects ADD COLUMN chunk_count INTEGER;

@@ -12,9 +12,25 @@
 |------|------|------|
 | `TG_BOT_TOKEN` | 从 @BotFather 获取的 Telegram Bot API token | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `DEFAULT_CHAT_ID` | Telegram 群组/超级群组的 chat ID | `-1001234567890` |
-| `S3_ACCESS_KEY_ID` | 客户端认证用的 S3 access key | `myaccesskey` |
-| `S3_SECRET_ACCESS_KEY` | 客户端认证用的 S3 secret key | `mysecretkey123` |
-| `BEARER_TOKEN` | Bot webhook 验证和内部认证的共享密钥 | `random-string-here` |
+
+### 自动生成（无需手动设置）
+
+| 变量 | 说明 | 生成方式 |
+|------|------|----------|
+| `BEARER_TOKEN` | Bot webhook 验证和内部认证的共享密钥 | `deploy.sh`（随机 48 字符） |
+| `VPS_SECRET` | Worker 与 processor 之间的认证密钥 | `deploy.sh`（随机 48 字符） |
+| S3 凭据 | S3 API 认证用的 access key + secret key | `deploy.sh`（在 D1 `credentials` 表中创建） |
+
+S3 凭据在部署时显示一次。之后可在 Mini App 的 **Keys** 标签页中管理（创建、撤销、设置单桶权限）。
+
+### 旧版 S3 凭据（可选）
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `S3_ACCESS_KEY_ID` | 旧版单凭据 S3 access key（D1 无凭据时的后备） | `myaccesskey` |
+| `S3_SECRET_ACCESS_KEY` | 旧版单凭据 S3 secret key | `mysecretkey123` |
+
+新部署使用 D1 多凭据系统。这些环境变量仅用于现有部署的向后兼容。
 
 ### Cloudflare（Docker 部署）
 
@@ -22,7 +38,10 @@
 |------|------|------|
 | `CLOUDFLARE_API_TOKEN` | CF API token（Docker 部署必填，手动部署可选） | `cf-api-token...` |
 | `CF_ACCOUNT_ID` | CF 账户 ID（未设置时自动检测） | `abc123def456` |
-| `CF_CUSTOM_DOMAIN` | Worker 的自定义域名 | `s3.example.com` |
+| `CF_CUSTOM_DOMAIN` | Worker 的自定义域名（同时启用 tunnel 自动创建） | `s3.example.com` |
+| `CF_TUNNEL_TOKEN` | Cloudflare Tunnel 连接器 token（设置 CF_CUSTOM_DOMAIN 时自动创建，也可手动设置） | `eyJhIjo...` |
+
+API token 权限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Settings:Read。如需 tunnel 自动创建，需额外添加 Cloudflare Tunnel:Edit 和 DNS:Edit。
 
 ### VPS / Processor（可选）
 
@@ -31,8 +50,8 @@
 | `VPS_SSH` | VPS 部署的 SSH 连接字符串 | -- |
 | `VPS_DEPLOY_DIR` | VPS 上的部署目录 | `/opt/tg-s3` |
 | `VPS_PORT` | Processor 服务端口 | `3000` |
-| `VPS_URL` | VPS processor 的公网 URL | -- |
-| `VPS_SECRET` | Worker 与 processor 之间的认证密钥 | -- |
+| `VPS_URL` | VPS processor 的公网 URL（使用 tunnel 时自动设置） | -- |
+| `VPS_SECRET` | Worker 与 processor 之间的认证密钥（自动生成） | -- |
 | `TG_LOCAL_API` | Telegram Local Bot API 端点 | `https://api.telegram.org` |
 
 ### Worker 运行时
@@ -89,9 +108,9 @@ crons = ["0 */6 * * *"]  # 每 6 小时执行维护任务
 
 ## 安全说明
 
-- **S3 凭据**用于 AWS SigV4 签名验证。请选择高强度的随机值。
-- **BEARER_TOKEN** 用于 Telegram webhook 调用和预签名 URL 生成的认证，务必保密。
-- **VPS_SECRET** 用于 Worker 与 processor 之间的通信认证，请使用单独的随机值。
+- **S3 凭据**存储在 D1 中，用于 AWS SigV4 签名验证。自动生成高强度随机值。在 Mini App Keys 标签页中管理。
+- **BEARER_TOKEN** 用于 Telegram webhook 调用和 Mini App initData 验证。未设置时自动生成。
+- **VPS_SECRET** 用于 Worker 与 processor 之间的通信认证。未设置时自动生成。
 - **CLOUDFLARE_API_TOKEN** 拥有对你的 CF 账户的写入权限，切勿提交到 git。
 - `.env` 文件默认已被 `.gitignore` 和 `.dockerignore` 排除。
 
