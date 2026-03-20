@@ -10,7 +10,7 @@ TG-S3 transforme Telegram en backend de stockage objet compatible S3. Les fichie
 
 ## Fonctionnalites
 
-- **API compatible S3** -- 22 operations dont l'upload multipart, les URL presignees et les requetes conditionnelles
+- **API compatible S3** -- 21 operations dont l'upload multipart, les URL presignees et les requetes conditionnelles
 - **Stockage gratuit illimite** -- Telegram fournit la couche de stockage gratuitement
 - **Cache a trois niveaux** -- CF CDN (L1) -> R2 (L2) -> Telegram (L3) pour des lectures rapides
 - **Bot Telegram** -- Gerez fichiers, buckets et partages directement depuis Telegram
@@ -108,7 +108,7 @@ rclone ls tgs3:default
 
 ## Compatibilite S3
 
-22 operations supportees couvrant le CRUD objets, l'upload multipart, la gestion des buckets et l'authentification.
+21 operations supportees couvrant le CRUD objets, l'upload multipart, la gestion des buckets et l'authentification.
 
 | Categorie | Operations |
 |-----------|-----------|

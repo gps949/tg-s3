@@ -18,6 +18,7 @@ interface TgUpdate {
     photo?: Array<{ file_id: string; file_unique_id: string; file_size?: number; width: number; height: number }>;
     video?: { file_id: string; file_unique_id: string; file_name?: string; file_size?: number; mime_type?: string };
     audio?: { file_id: string; file_unique_id: string; file_name?: string; file_size?: number; mime_type?: string };
+    voice?: { file_id: string; file_unique_id: string; file_size?: number; duration: number; mime_type?: string };
   };
   callback_query?: {
     id: string;
@@ -74,9 +75,9 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
     return new Response('ok');
   }
 
-  // Non-command text or unsupported message types (sticker, voice, location, etc.)
+  // Non-command text or unsupported message types (sticker, location, etc.)
   if (!msg.text) {
-    await sendMessage(chatId, '不支持此消息类型，请发送文件、图片、视频或音频。\n输入 /help 查看帮助。', env);
+    await sendMessage(chatId, '不支持此消息类型，请发送文件、图片、视频、音频或语音。\n输入 /help 查看帮助。', env);
   } else {
     // Plain text that's not a command
     await sendMessage(chatId, '发送文件给我即可上传，或输入 /help 查看命令列表。', env);
@@ -254,6 +255,15 @@ function extractFileInfo(msg: TgUpdate['message']): FileInfo | null {
       fileName: msg.audio.file_name || `audio_${Date.now()}.mp3`,
       fileSize: msg.audio.file_size || 0,
       mimeType: msg.audio.mime_type || 'audio/mpeg',
+    };
+  }
+  if (msg.voice) {
+    return {
+      fileId: msg.voice.file_id,
+      fileUniqueId: msg.voice.file_unique_id,
+      fileName: `voice_${Date.now()}.ogg`,
+      fileSize: msg.voice.file_size || 0,
+      mimeType: msg.voice.mime_type || 'audio/ogg',
     };
   }
   return null;
