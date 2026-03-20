@@ -22,7 +22,7 @@
 - S3 兼容 API（PutObject / GetObject / DeleteObject / ListObjectsV2 / HeadObject / CopyObject）
 - 元数据索引（D1）
 - CDN 缓存加速（CF CDN）
-- 基础认证（Bearer Token 或简化 SigV4）
+- 认证（SigV4 签名 + TG WebApp initData）
 - 图床直链（支持 JPEG/PNG/WebP/GIF 直接访问）
 
 ### Tier 2: 增强功能（CF 免费）

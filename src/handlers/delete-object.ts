@@ -89,7 +89,7 @@ async function deleteTgMessage(chatId: string, messageId: number, env: Env): Pro
   const tg = new TelegramClient(env);
   try {
     await tg.deleteMessage(chatId, messageId);
-  } catch { /* best effort */ }
+  } catch (e) { console.error(`deleteTgMessage(${chatId}, ${messageId}) failed:`, e); }
 }
 
 export async function deleteChunks(bucket: string, key: string, env: Env, store: MetadataStore): Promise<void> {
@@ -98,10 +98,10 @@ export async function deleteChunks(bucket: string, key: string, env: Env, store:
     if (chunks.length > 0) {
       const tg = new TelegramClient(env);
       await Promise.allSettled(chunks.map(chunk =>
-        tg.deleteMessage(chunk.tg_chat_id, chunk.tg_message_id).catch(() => {})
+        tg.deleteMessage(chunk.tg_chat_id, chunk.tg_message_id).catch(e => console.error(`deleteChunks: deleteMessage(${chunk.tg_chat_id}, ${chunk.tg_message_id}) failed:`, e))
       ));
     }
-  } catch { /* best effort */ }
+  } catch (e) { console.error(`deleteChunks(${bucket}, ${key}) failed:`, e); }
 }
 
 export async function deleteDerivatives(bucket: string, key: string, env: Env, store: MetadataStore): Promise<void> {

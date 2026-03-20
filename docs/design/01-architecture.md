@@ -65,7 +65,7 @@
 
 职责：
 - 接收并解析 S3 HTTP 请求（路径、headers、query params）
-- 认证：验证 SigV4 签名或 Bearer Token 或 Presigned URL
+- 认证：验证 SigV4 签名或 TG WebApp initData 或 Presigned URL
 - 路由：根据操作类型分发到对应 handler
 - 小文件（<=20MB）：直接调用 TG Bot API 存取（上传限制与下载对齐，确保上传的文件可下载）
 - 大文件/媒体处理：转发请求到 VPS
@@ -203,7 +203,7 @@
 | Worker | TG Bot API | HTTPS | Bot Token |
 | Worker | VPS | HTTPS | Bearer Token (VPS_SECRET) |
 | Worker | R2 | Worker Binding | 内置 |
-| Web UI | Worker | HTTPS | Bearer Token |
+| TG Mini App | Worker | HTTPS | TG WebApp initData |
 | TG Bot | Worker (webhook) | HTTPS | TG webhook secret |
 | VPS | TG Local Bot API | HTTP (localhost) | Bot Token |
 

@@ -255,7 +255,7 @@ POST /{bucket}/{key}?uploads
 ```
 
 处理：
-1. 生成 uploadId (16 字节随机数, base64url 编码)
+1. 生成 uploadId (UUID v4, `crypto.randomUUID()`)
 2. INSERT INTO multipart_uploads (upload_id, bucket, key, created_at)
 3. 返回 uploadId
 
@@ -319,41 +319,29 @@ PUT /{bucket}
 
 ## 认证
 
-### 方案 A: 简化 Bearer Token（推荐初期）
+### AWS SigV4（S3 客户端）
 
-```
-Authorization: Bearer {token}
-```
-- 配置一个固定 token，Worker 环境变量存储
-- 简单可靠，10ms CPU 限制无压力
-- 缺点：不兼容原生 S3 SDK 的认证方式
-
-### 方案 B: AWS SigV4（完整兼容）
-
-标准 S3 签名验证流程：
+标准 S3 签名验证流程，支持多凭证（D1 `credentials` 表管理）：
 1. 从 Authorization header 提取 Credential, SignedHeaders, Signature
-2. 重建 Canonical Request
-3. 重建 String to Sign
-4. 用 Secret Key 派生 Signing Key
+2. 通过 Access Key ID 查询对应的 Secret Access Key（带 60s 内存缓存）
+3. 重建 Canonical Request → String to Sign
+4. 用 Secret Key 派生 Signing Key（HMAC-SHA256）
 5. 计算签名并比对
 
-```typescript
-async function verifySigV4(request: Request, secretKey: string): Promise<boolean> {
-  // 使用 Web Crypto API 的 HMAC-SHA256
-  // 约 1-3ms CPU 时间
-  const key = await deriveSigningKey(secretKey, date, region, 's3');
-  const signature = await hmacSha256(key, stringToSign);
-  return signature === providedSignature;
-}
-```
+CPU 开销：1-3ms，在免费计划 10ms CPU 限制内完全可行。
 
-CPU 开销：1-3ms，在免费计划 10ms CPU 限制内完全可行（已验证可用）。
+### TG WebApp initData（Mini App）
 
-### 方案 C: 双模式（推荐最终方案）
+Telegram Mini App 通过 WebApp initData 认证：
+1. 从 Authorization header 提取 `tg <initData>`
+2. 按 Telegram 规范验证 HMAC 签名
+3. 验证通过后授予 API 访问权限
 
-- 内部 API / Web UI: Bearer Token
-- S3 客户端 (rclone/aws cli): SigV4
-- 预签名 URL: Query String 认证
+### 认证模式总结
+
+- S3 客户端 (rclone/aws cli): SigV4（多凭证）
+- TG Mini App: TG WebApp initData
+- 预签名 URL: SigV4 Query String 认证
 - 公开分享链接: 分享 Token 认证
 
 ## 明确不实现的 S3 能力
