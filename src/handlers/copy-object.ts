@@ -27,6 +27,9 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
 
   // x-amz-metadata-directive: COPY (default) or REPLACE
   const metadataDirective = (s3.headers.get('x-amz-metadata-directive') || 'COPY').toUpperCase();
+  if (metadataDirective !== 'COPY' && metadataDirective !== 'REPLACE') {
+    return errorResponse(400, 'InvalidArgument', `Unknown metadata directive '${metadataDirective}'.`);
+  }
 
   // S3 rejects copy-to-self with COPY directive (must use REPLACE to modify metadata)
   if (srcBucket === s3.bucket && srcKey === s3.key && metadataDirective !== 'REPLACE') {

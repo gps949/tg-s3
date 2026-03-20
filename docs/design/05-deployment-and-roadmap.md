@@ -338,6 +338,10 @@ if (path.startsWith('/share/')) return handleShareAccess(request, url, env);
 | GET | `/api/miniapp/stats` | 全局统计 |
 | POST | `/api/miniapp/rename` | 重命名/移动文件 (body: `{bucket, oldKey, newKey}`) |
 | POST | `/api/miniapp/presign` | 生成预签名 URL (body: `{bucket, key, method?, expiresIn?}`) |
+| GET | `/api/miniapp/credentials?bucket=` | 列出凭证 (secret_access_key 脱敏) |
+| POST | `/api/miniapp/credential` | 创建凭证 (body: `{buckets?, permission?}`) |
+| PATCH | `/api/miniapp/credential` | 更新凭证 (body: `{id, buckets?, permission?}`) |
+| DELETE | `/api/miniapp/credential?id=` | 删除凭证 |
 
 所有端点需认证（Telegram WebApp initData）。
 
