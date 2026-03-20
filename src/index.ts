@@ -428,11 +428,16 @@ async function dispatchS3(op: S3Operation, s3: S3Request, env: Env, ctx: Executi
   }
 }
 
+const MAX_PRESIGN_EXPIRES = 604800; // 7 days (S3 limit)
+
 async function handlePresignApi(request: Request, url: URL, env: Env): Promise<Response> {
   let body: { bucket: string; key: string; method?: string; expiresIn?: number };
   try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
   if (!body.bucket || !body.key) {
     return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+  }
+  if (body.expiresIn !== undefined && body.expiresIn > MAX_PRESIGN_EXPIRES) {
+    return Response.json({ error: `expiresIn cannot exceed ${MAX_PRESIGN_EXPIRES} seconds (7 days)` }, { status: 400 });
   }
   const presignedUrl = await generatePresignedUrl({
     bucket: body.bucket,
@@ -581,6 +586,9 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     if (!body.bucket || !body.key) {
       return Response.json({ error: 'bucket and key are required' }, { status: 400 });
     }
+    if (body.expiresIn !== undefined && body.expiresIn > MAX_PRESIGN_EXPIRES) {
+      return Response.json({ error: `expiresIn cannot exceed ${MAX_PRESIGN_EXPIRES} seconds (7 days)` }, { status: 400 });
+    }
     const presignedUrl = await generatePresignedUrl({
       bucket: body.bucket, key: body.key, method: body.method,
       expiresIn: body.expiresIn, env, baseUrl: url.origin,
@@ -638,6 +646,7 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
       return Response.json({ error: 'permission must be admin, readwrite, or readonly' }, { status: 400 });
     }
     const ok = await store.updateCredential(accessKeyId, body);
+    credentialCache.delete(accessKeyId);
     return Response.json({ ok });
   }
 
@@ -646,6 +655,7 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     const accessKeyId = url.searchParams.get('accessKeyId');
     if (!accessKeyId) return Response.json({ error: 'accessKeyId required' }, { status: 400 });
     const ok = await store.deleteCredential(accessKeyId);
+    credentialCache.delete(accessKeyId);
     return Response.json({ ok });
   }
 

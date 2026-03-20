@@ -21,6 +21,8 @@ export interface MediaJobResponse {
   error?: string;
 }
 
+const VPS_MAX_RETRIES = 2;
+
 export class VpsClient {
   private baseUrl: string;
   private secret: string;
@@ -37,64 +39,95 @@ export class VpsClient {
     };
   }
 
+  /** Retry on fast transient failures (connection refused, DNS, quick 502/503). */
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < VPS_MAX_RETRIES; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        lastError = e as Error;
+        // Only retry on network/timeout errors (not HTTP 4xx application errors)
+        const isNetworkError = e instanceof TypeError; // fetch() network failure
+        const isTimeout = e instanceof DOMException && e.name === 'AbortError';
+        if ((isNetworkError || isTimeout) && attempt < VPS_MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastError!;
+  }
+
   async submitJob(job: MediaJobRequest): Promise<MediaJobResponse> {
-    const res = await fetch(`${this.baseUrl}/api/jobs`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({
-        bucket: job.bucket,
-        key: job.key,
-        tg_file_id: job.tgFileId,
-        job_type: job.jobType,
-      }),
-      signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+    return this.withRetry(async () => {
+      const res = await fetch(`${this.baseUrl}/api/jobs`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({
+          bucket: job.bucket,
+          key: job.key,
+          tg_file_id: job.tgFileId,
+          job_type: job.jobType,
+        }),
+        signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+      });
+      if (!res.ok) throw new Error(`VPS job submit failed: ${res.status}`);
+      return res.json();
     });
-    if (!res.ok) throw new Error(`VPS job submit failed: ${res.status}`);
-    return res.json();
   }
 
   async getJobStatus(jobId: string): Promise<MediaJobResponse> {
-    const res = await fetch(`${this.baseUrl}/api/jobs/${jobId}`, {
-      headers: this.headers(),
-      signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+    return this.withRetry(async () => {
+      const res = await fetch(`${this.baseUrl}/api/jobs/${jobId}`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+      });
+      if (!res.ok) throw new Error(`VPS job query failed: ${res.status}`);
+      return res.json();
     });
-    if (!res.ok) throw new Error(`VPS job query failed: ${res.status}`);
-    return res.json();
   }
 
   async proxyGet(fileId: string): Promise<Response> {
-    const res = await fetch(`${this.baseUrl}/api/proxy/get`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ file_id: fileId }),
-      signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+    return this.withRetry(async () => {
+      const res = await fetch(`${this.baseUrl}/api/proxy/get`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ file_id: fileId }),
+        signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+      });
+      if (!res.ok) throw new Error(`VPS proxy get failed: ${res.status}`);
+      return res;
     });
-    if (!res.ok) throw new Error(`VPS proxy get failed: ${res.status}`);
-    return res;
   }
 
   async proxyRange(fileId: string, start: number, end: number): Promise<Response> {
-    const res = await fetch(`${this.baseUrl}/api/proxy/range`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ file_id: fileId, start, end }),
-      signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+    return this.withRetry(async () => {
+      const res = await fetch(`${this.baseUrl}/api/proxy/range`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ file_id: fileId, start, end }),
+        signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+      });
+      if (!res.ok) throw new Error(`VPS proxy range failed: ${res.status}`);
+      return res;
     });
-    if (!res.ok) throw new Error(`VPS proxy range failed: ${res.status}`);
-    return res;
   }
 
   async imageResize(fileId: string, width?: string | null, format?: string | null): Promise<Response> {
-    const params = new URLSearchParams();
-    params.set('tg_file_id', fileId);
-    if (width) params.set('width', width);
-    if (format) params.set('format', format);
-    const res = await fetch(`${this.baseUrl}/api/image/resize?${params}`, {
-      headers: { 'Authorization': `Bearer ${this.secret}` },
-      signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+    return this.withRetry(async () => {
+      const params = new URLSearchParams();
+      params.set('tg_file_id', fileId);
+      if (width) params.set('width', width);
+      if (format) params.set('format', format);
+      const res = await fetch(`${this.baseUrl}/api/image/resize?${params}`, {
+        headers: { 'Authorization': `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
+      });
+      if (!res.ok) throw new Error(`VPS image resize failed: ${res.status}`);
+      return res;
     });
-    if (!res.ok) throw new Error(`VPS image resize failed: ${res.status}`);
-    return res;
   }
 
   async proxyPut(data: ArrayBuffer, chatId: string, filename: string, contentType: string, messageThreadId?: number | null): Promise<Response> {

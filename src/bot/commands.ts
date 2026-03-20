@@ -255,7 +255,7 @@ ETag: ${escHtml(obj.etag)}
 }
 
 async function shareCmd(args: string[], env: Env, baseUrl?: string): Promise<string> {
-  if (args.length < 2) return '用法: /share &lt;bucket&gt; &lt;key&gt; [时效秒数] [口令] [最大次数]';
+  if (args.length < 2) return '用法: /share &lt;bucket&gt; &lt;key&gt; [时效秒数] [口令] [最大次数]\n例: <code>/share docs report.pdf</code> (永久)\n例: <code>/share docs report.pdf 86400</code> (1天)\n例: <code>/share docs report.pdf 86400 mypass 10</code>';
   const bucket = args[0];
   // Parse optional trailing params from the end to support keys with spaces.
   // Pattern: <key...> [expiresIn(numeric)] [password] [maxDownloads(numeric)]
@@ -428,7 +428,7 @@ async function searchCmd(args: string[], env: Env): Promise<string> {
     return `📄 ${escHtml(obj.key)} (${formatSize(obj.size)})`;
   });
 
-  if (hasMore) lines.push('\n... 还有更多结果');
+  if (hasMore) lines.push('\n... 还有更多结果，请使用更精确的关键词缩小范围');
   return `<b>搜索结果</b> (${hasMore ? '20+' : shown.length} 个)\n\n` + lines.join('\n');
 }
 

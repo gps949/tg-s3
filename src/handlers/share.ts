@@ -167,7 +167,7 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
       });
     }
     if (result.needsPassword && result.shareToken) {
-      return new Response(renderPasswordPage(result.shareToken, url.origin, result.wrongPassword, undefined, lang), {
+      return new Response(renderPasswordPage(result.shareToken, url.origin, result.wrongPassword, undefined, lang, result.remainingAttempts), {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });

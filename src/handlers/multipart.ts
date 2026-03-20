@@ -116,9 +116,11 @@ export async function handleUploadPart(s3: S3Request, env: Env, ctx: ExecutionCo
     ctx.waitUntil(cleanupParts([oldPart], env));
   }
 
+  const partHeaders: Record<string, string> = { 'ETag': etag };
+  if (contentMd5) partHeaders['Content-MD5'] = contentMd5;
   return new Response(null, {
     status: 200,
-    headers: { 'ETag': etag },
+    headers: partHeaders,
   });
 }
 
@@ -367,7 +369,9 @@ async function consolidateViaVps(
 async function cleanupParts(parts: Array<{ tg_chat_id: string; tg_message_id: number }>, env: Env): Promise<void> {
   const tg = new TelegramClient(env);
   await Promise.allSettled(parts.map(p =>
-    tg.deleteMessage(p.tg_chat_id, p.tg_message_id).catch(() => {})
+    tg.deleteMessage(p.tg_chat_id, p.tg_message_id).catch(e => {
+      console.warn(`Cleanup: failed to delete part message ${p.tg_message_id}:`, e);
+    })
   ));
 }
 

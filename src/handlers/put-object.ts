@@ -66,7 +66,9 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     if (oldObj) ctx.waitUntil(cleanupOldObject(s3.bucket, s3.key, oldObj, env));
     ctx.waitUntil(purgeCdnCache(s3.url.origin, s3.bucket, s3.key));
     ctx.waitUntil(purgeR2Cache(env, s3.bucket, s3.key));
-    return new Response(null, { status: 200, headers: { 'ETag': etag } });
+    const zeroHeaders: Record<string, string> = { 'ETag': etag };
+    if (contentMd5) zeroHeaders['Content-MD5'] = contentMd5;
+    return new Response(null, { status: 200, headers: zeroHeaders });
   }
 
   let result;
@@ -105,7 +107,9 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     ctx.waitUntil(triggerMediaProcessing(s3.bucket, s3.key, result.tgFileId, contentType, env));
   }
 
-  return new Response(null, { status: 200, headers: { 'ETag': etag } });
+  const putHeaders: Record<string, string> = { 'ETag': etag };
+  if (contentMd5) putHeaders['Content-MD5'] = contentMd5;
+  return new Response(null, { status: 200, headers: putHeaders });
 }
 
 async function triggerMediaProcessing(
@@ -124,7 +128,7 @@ async function triggerMediaProcessing(
     const { VpsClient } = await import('../media/vps-client');
     const vps = new VpsClient(env);
     await vps.submitJob({ bucket, key, tgFileId, jobType });
-  } catch { /* best effort - VPS may be unavailable */ }
+  } catch (e) { console.warn(`Media processing trigger failed for ${bucket}/${key}:`, e); }
 }
 
 export async function readBody(s3: S3Request): Promise<ArrayBuffer | null> {
@@ -226,7 +230,9 @@ async function cleanupOldObject(bucket: string, key: string, oldObj: ObjectRow, 
   // Delete old TG message
   if (oldObj.tg_file_id !== '__zero__' && oldObj.tg_message_id !== 0) {
     const tg = new TelegramClient(env);
-    promises.push(tg.deleteMessage(oldObj.tg_chat_id, oldObj.tg_message_id).then(() => {}).catch(() => {}));
+    promises.push(tg.deleteMessage(oldObj.tg_chat_id, oldObj.tg_message_id).then(() => {}).catch(e => {
+      console.warn(`Cleanup: failed to delete TG message ${oldObj.tg_message_id}:`, e);
+    }));
   }
   // Delete stale derivatives (generated from old content) and orphaned chunks
   const store = new MetadataStore(env);

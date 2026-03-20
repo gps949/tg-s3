@@ -30,7 +30,7 @@ export class TelegramClient {
         const text = await res.text();
         throw new TgApiError(`TG sendDocument failed (${res.status}): ${text}`, res.status);
       }
-      return res.json();
+      return this.parseResponse<TgMessageResponse>(res, 'sendDocument');
     });
   }
 
@@ -49,7 +49,7 @@ export class TelegramClient {
         const text = await res.text();
         throw new TgApiError(`TG sendDocument(file_id) failed (${res.status}): ${text}`, res.status);
       }
-      return res.json();
+      return this.parseResponse<TgMessageResponse>(res, 'sendDocument');
     });
   }
 
@@ -66,7 +66,7 @@ export class TelegramClient {
         const text = await res.text();
         throw new TgApiError(`TG getFile failed (${res.status}): ${text}`, res.status);
       }
-      return res.json();
+      return this.parseResponse<TgFileResponse>(res, 'getFile');
     });
   }
 
@@ -117,7 +117,7 @@ export class TelegramClient {
         const text = await res.text();
         throw new TgApiError(`TG forwardMessage failed (${res.status}): ${text}`, res.status);
       }
-      return res.json();
+      return this.parseResponse<TgMessageResponse>(res, 'forwardMessage');
     });
   }
 
@@ -134,7 +134,7 @@ export class TelegramClient {
         const text = await res.text();
         throw new TgApiError(`TG createForumTopic failed (${res.status}): ${text}`, res.status);
       }
-      return res.json();
+      return this.parseResponse<TgForumTopicResponse>(res, 'createForumTopic');
     });
   }
 
@@ -151,6 +151,15 @@ export class TelegramClient {
       const data = await res.json() as { ok: boolean };
       return data.ok;
     });
+  }
+
+  /** Parse JSON and validate TG API response shape ({ ok: true, result: ... }) */
+  private async parseResponse<T>(res: Response, method: string): Promise<T> {
+    const data = await res.json() as { ok?: boolean; result?: unknown };
+    if (!data || typeof data !== 'object' || !data.ok || !('result' in data)) {
+      throw new TgApiError(`TG ${method}: unexpected response shape: ok=${data?.ok}`, res.status);
+    }
+    return data as T;
   }
 
   private async checkFloodWait(res: Response): Promise<void> {

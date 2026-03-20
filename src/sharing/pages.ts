@@ -76,7 +76,7 @@ export function renderSharePage(obj: ObjectRow, share: ShareTokenRow, baseUrl: s
   } else if (isPdf) {
     previewHtml = `<div class="preview"><embed src="${inlineUrl}" type="application/pdf" style="width:100%;height:min(480px,60vh);border-radius:8px;border:1px solid #eee"></div>`;
   } else if (isText && obj.size <= 512 * 1024) {
-    previewHtml = `<div class="preview"><pre id="text-preview" style="max-height:400px;overflow:auto;background:#f5f5f5;padding:12px;border-radius:8px;font-size:13px;text-align:left;white-space:pre-wrap;word-break:break-all;color:#999;text-align:center">${escapeHtml(st(lang, 'loading_preview'))}</pre><p id="text-truncated" style="display:none;font-size:12px;color:#999;margin-top:4px;text-align:center">${escapeHtml(st(lang, 'content_truncated'))}</p></div>`;
+    previewHtml = `<div class="preview"><pre id="text-preview" style="max-height:min(400px,60vh);overflow:auto;background:#f5f5f5;padding:12px;border-radius:8px;font-size:13px;text-align:left;white-space:pre-wrap;word-break:break-all;color:#999;text-align:center">${escapeHtml(st(lang, 'loading_preview'))}</pre><p id="text-truncated" style="display:none;font-size:12px;color:#999;margin-top:4px;text-align:center">${escapeHtml(st(lang, 'content_truncated'))}</p></div>`;
   } else if (isText) {
     previewHtml = `<div class="preview"><p style="font-size:13px;color:#999;margin:16px 0">${escapeHtml(st(lang, 'text_too_large', sizeStr))}</p></div>`;
   } else {
@@ -116,7 +116,7 @@ h2{margin-bottom:16px;font-size:20px}
 .preview img{max-width:100%;border-radius:8px}
 .preview video{max-width:100%;border-radius:8px}
 .expired{color:#e53935;text-align:center;padding:40px}
-.actions{display:flex;gap:8px;margin-top:12px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .actions .btn{flex:1}
 .btn-secondary{background:#666}
 .btn-secondary:hover{background:#555}
@@ -163,14 +163,17 @@ ${isText && obj.size <= 512 * 1024 ? `fetch('${inlineUrl}').then(r=>r.text()).th
 </html>`;
 }
 
-export function renderPasswordPage(share: ShareTokenRow, baseUrl: string, wrongPassword?: boolean, lockedMinutes?: number, lang: Lang = 'en'): string {
+export function renderPasswordPage(share: ShareTokenRow, baseUrl: string, wrongPassword?: boolean, lockedMinutes?: number, lang: Lang = 'en', remainingAttempts?: number): string {
   let messageHtml = '';
   let formDisabled = '';
   if (lockedMinutes && lockedMinutes > 0) {
     messageHtml = `<p class="error">${escapeHtml(st(lang, 'locked_msg', lockedMinutes))}</p>`;
     formDisabled = ' style="opacity:0.5;pointer-events:none"';
   } else if (wrongPassword) {
-    messageHtml = `<p class="error">${escapeHtml(st(lang, 'wrong_password'))}</p>`;
+    const attemptsHint = remainingAttempts !== undefined && remainingAttempts > 0
+      ? ` (${st(lang, 'remaining_attempts', remainingAttempts)})`
+      : '';
+    messageHtml = `<p class="error">${escapeHtml(st(lang, 'wrong_password') + attemptsHint)}</p>`;
   }
   return `<!DOCTYPE html>
 <html lang="${langAttr(lang)}">

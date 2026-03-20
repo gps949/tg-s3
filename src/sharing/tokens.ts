@@ -40,6 +40,7 @@ export async function validateShareToken(token: string, password: string | null,
   wrongPassword?: boolean;
   locked?: boolean;
   lockSeconds?: number;
+  remainingAttempts?: number;
 }> {
   const store = new MetadataStore(env);
   const share = await store.getShareToken(token);
@@ -73,8 +74,10 @@ export async function validateShareToken(token: string, password: string | null,
     const match = await verifyPassword(password, share.password_hash);
     if (!match) {
       // 记录失败尝试
-      await store.recordPasswordFailure(token, ip);
-      return { valid: false, needsPassword: true, wrongPassword: true, shareToken: share };
+      const maxAttempts = 5;
+      const attempts = await store.recordPasswordFailure(token, ip, maxAttempts);
+      const remaining = Math.max(0, maxAttempts - attempts);
+      return { valid: false, needsPassword: true, wrongPassword: true, shareToken: share, remainingAttempts: remaining };
     }
     // 验证成功: 清除失败记录
     await store.clearPasswordAttempts(token, ip);
