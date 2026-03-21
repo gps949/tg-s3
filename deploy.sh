@@ -87,7 +87,12 @@ persist_env() {
         echo "$line"
       fi
     done < .env > "$tmpfile"
-    mv "$tmpfile" .env || { rm -f "$tmpfile"; return 1; }
+    if cat "$tmpfile" > .env; then
+      rm -f "$tmpfile"
+    else
+      rm -f "$tmpfile"
+      return 1
+    fi
   else
     echo "${key}=${val}" >> .env
   fi
