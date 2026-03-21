@@ -59,6 +59,15 @@ if [ -n "${CF_ACCOUNT_ID:-}" ] && [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
 fi
 
 # ---- 工具函数 ----
+# 跨平台 sed -i (macOS 需要 -i ''，Linux 需要 -i)
+sed_inplace() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 derive_webhook_secret() {
   node -e "const c=require('crypto');console.log(c.createHmac('sha256',process.env.TG_BOT_TOKEN).update('tg-s3-webhook').digest('hex'))"
 }
@@ -134,9 +143,14 @@ deploy_cf() {
   fi
   log "Cloudflare 认证正常"
 
-  # 创建 D1 数据库 (如果 wrangler.toml 中 database_id 为空)
+  # 创建 D1 数据库 (优先从 .env 恢复 DB_ID，避免容器内 wrangler.toml 修改丢失)
   CURRENT_DB_ID=$(grep 'database_id' wrangler.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
-  if [ -z "$CURRENT_DB_ID" ]; then
+  if [ -n "${D1_DATABASE_ID:-}" ] && [ -z "$CURRENT_DB_ID" ]; then
+    # 从 .env 恢复 (上次部署已持久化)
+    DB_ID="$D1_DATABASE_ID"
+    sed_inplace "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
+    log "D1 数据库 ID 已从 .env 恢复: $DB_ID"
+  elif [ -z "$CURRENT_DB_ID" ]; then
     step "创建 D1 数据库 tg-s3-db"
     DB_OUTPUT=$(npx wrangler d1 create tg-s3-db 2>&1) || true
 
@@ -152,16 +166,15 @@ deploy_cf() {
     fi
 
     # 更新 wrangler.toml
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-      sed -i '' "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
-    else
-      sed -i "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
-    fi
+    sed_inplace "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
     log "D1 数据库创建成功: $DB_ID"
   else
     DB_ID="$CURRENT_DB_ID"
     log "D1 数据库已存在: $DB_ID"
   fi
+
+  # 持久化 DB_ID 到 .env (Docker 容器内 wrangler.toml 修改不持久，.env 通过 volume 挂载持久化)
+  persist_env D1_DATABASE_ID "$DB_ID"
 
   # 创建 R2 缓存 bucket
   step "创建 R2 缓存 bucket tg-s3-cache"
