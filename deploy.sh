@@ -274,7 +274,7 @@ ROUTE_EOF
   fi
   echo "$DEPLOY_OUTPUT"
 
-  WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+\.workers\.dev' | head -1)
+  WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+\.workers\.dev' | head -1) || WORKER_URL=""
   if [ -n "$WORKER_URL" ]; then
     log "Worker 部署成功: $WORKER_URL"
   else
