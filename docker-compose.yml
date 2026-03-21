@@ -1,6 +1,7 @@
 services:
-  # 部署 CF Worker 到 Cloudflare + 启动本地 processor:
-  #   docker compose up -d
+  # 使用 Cloudflare Tunnel 部署 (build 和 up 必须分开执行):
+  #   docker compose --profile tunnel build
+  #   docker compose --profile tunnel up -d
   #
   # 仅重新部署 CF Worker (不重启 processor):
   #   docker compose run --rm deploy

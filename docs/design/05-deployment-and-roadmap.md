@@ -75,8 +75,6 @@ VPS 上运行:
 ### Docker Compose
 
 ```yaml
-version: '3.8'
-
 services:
   # 一次性部署服务: 将 CF Worker 推送到 Cloudflare，运行后退出
   deploy:
@@ -131,6 +129,30 @@ volumes:
 > `processor` 为常驻服务，处理大文件和媒体请求。
 > `telegram-bot-api` 为可选服务，需要 2GB 文件支持时取消注释并配置 `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`。
 
+### 部署操作
+
+```bash
+# 首次部署 (使用 Cloudflare Tunnel)
+docker compose --profile tunnel build
+docker compose --profile tunnel up -d
+
+# 更新代码后重新部署
+git pull
+docker compose --profile tunnel build
+docker compose --profile tunnel up -d
+
+# 仅重新部署 CF Worker (不重启 processor)
+docker compose run --rm deploy
+
+# 停止所有服务
+docker compose --profile tunnel down
+
+# 查看日志
+docker compose --profile tunnel logs -f
+```
+
+> **重要**: 由于 Docker BuildKit 并行构建的兼容性问题，`build` 和 `up` 必须分两步执行，不能直接 `docker compose --profile tunnel up -d --build`。
+
 ### Caddyfile
 
 ```
@@ -155,13 +177,17 @@ vps.tg-s3.example.com {
 ```dockerfile
 FROM node:22-slim
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --production
-COPY . .
+COPY package.json ./
+RUN npm install --omit=dev
 
+COPY server.js ./
+
+ENV PORT=3000
 EXPOSE 3000
 CMD ["node", "server.js"]
 ```
