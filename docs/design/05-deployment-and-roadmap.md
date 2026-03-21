@@ -88,11 +88,10 @@ services:
     restart: "no"
 
   # 媒体处理 + 大文件代理服务 (常驻)
+  # Tunnel 和 Caddy 均通过 Docker 内部网络访问, 无需暴露宿主机端口
   processor:
     build: ./processor
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:${VPS_PORT:-3000}:3000"
     environment:
       - PORT=3000
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
