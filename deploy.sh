@@ -198,9 +198,13 @@ deploy_cf() {
 
   # R2 lifecycle: 90 天兜底 GC
   step "配置 R2 兜底清理策略 (90 天)"
-  npx wrangler r2 bucket lifecycle add tg-s3-cache "cache-gc" \
-    --expire-days 90 2>&1 || true
-  log "R2 lifecycle 规则已设置"
+  LIFECYCLE_OUT=$(npx wrangler r2 bucket lifecycle add tg-s3-cache "cache-gc" \
+    --expire-days 90 2>&1) || true
+  if echo "$LIFECYCLE_OUT" | grep -q "Rule IDs must be unique"; then
+    log "R2 lifecycle 规则已存在"
+  else
+    log "R2 lifecycle 规则已设置"
+  fi
 
   # 初始化数据库 schema
   step "初始化 D1 数据库 schema"
