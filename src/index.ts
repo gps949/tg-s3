@@ -95,7 +95,24 @@ export default {
         const store = new MetadataStore(env);
         const bucketRow = await store.getBucket(bucket);
         if (bucketRow?.is_public) {
-          const s3: S3Request = { method: request.method, bucket, key, query: url.searchParams, headers: request.headers, body: null, url };
+          let query = url.searchParams;
+          // Auto-optimize: inject default compression params if bucket has optimize_config
+          // Skip if ?original=1 or if explicit w/fmt/q params are present
+          if (bucketRow.optimize_config && !url.searchParams.has('original')) {
+            const hasExplicitParams = url.searchParams.has('w') || url.searchParams.has('fmt') || url.searchParams.has('q');
+            if (!hasExplicitParams) {
+              try {
+                const cfg = JSON.parse(bucketRow.optimize_config);
+                if (cfg.enabled) {
+                  query = new URLSearchParams(url.searchParams);
+                  query.set('w', cfg.maxWidth.toString());
+                  query.set('q', cfg.quality.toString());
+                  query.set('fmt', cfg.format === 'auto' ? 'auto' : cfg.format);
+                }
+              } catch { /* invalid config, use original query */ }
+            }
+          }
+          const s3: S3Request = { method: request.method, bucket, key, query, headers: request.headers, body: null, url };
           const handler = request.method === 'GET' ? handleGetObject : handleHeadObject;
           return addCorsHeaders(await handler(s3, env, ctx));
         }
@@ -805,10 +822,21 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
   if (path === '/api/miniapp/bucket' && method === 'PATCH') {
     const name = url.searchParams.get('name');
     if (!name) return Response.json({ error: 'name required' }, { status: 400 });
-    let body: { is_public?: boolean };
+    let body: { is_public?: boolean; optimize_config?: { enabled: boolean; format: string; quality: number; maxWidth: number } | null };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
     if (body.is_public !== undefined) {
       await store.updateBucketPublicAccess(name, body.is_public);
+    }
+    if (body.optimize_config !== undefined) {
+      if (body.optimize_config === null) {
+        await store.updateBucketOptimizeConfig(name, null);
+      } else {
+        const c = body.optimize_config;
+        if (!['auto', 'webp', 'avif'].includes(c.format)) return Response.json({ error: 'format must be auto, webp, or avif' }, { status: 400 });
+        if (!Number.isInteger(c.quality) || c.quality < 1 || c.quality > 100) return Response.json({ error: 'quality must be 1-100' }, { status: 400 });
+        if (!Number.isInteger(c.maxWidth) || c.maxWidth < 100 || c.maxWidth > 4096) return Response.json({ error: 'maxWidth must be 100-4096' }, { status: 400 });
+        await store.updateBucketOptimizeConfig(name, JSON.stringify({ enabled: c.enabled, format: c.format, quality: c.quality, maxWidth: c.maxWidth }));
+      }
     }
     return Response.json({ ok: true });
   }

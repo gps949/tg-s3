@@ -39,6 +39,14 @@ export interface BucketRow {
   object_count: number;
   total_size: number;
   is_public: number;
+  optimize_config: string | null;  // JSON: OptimizeConfig
+}
+
+export interface OptimizeConfig {
+  enabled: boolean;
+  format: 'auto' | 'webp' | 'avif';
+  quality: number;    // 1-100
+  maxWidth: number;   // max px, e.g. 2048
 }
 
 export interface MultipartUploadRow {

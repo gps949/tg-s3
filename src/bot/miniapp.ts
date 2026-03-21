@@ -317,12 +317,14 @@ async function loadBuckets() {
       return;
     }
     el.innerHTML = createBtn + buckets.map(b => \`
-      <div class="bucket-card" onclick="openBucket('\${escJs(b.name)}')">
+      <div class="bucket-card" style="position:relative" onclick="openBucket('\${escJs(b.name)}')">
         <div style="display:flex;align-items:center;gap:6px">
           <div class="bucket-name">\${esc(b.name)}</div>
           \${b.is_public ? '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--link);color:var(--btn-text)">' + esc(t('bucket_public_on')) + '</span>' : ''}
+          \${b.optimize_config ? '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:color-mix(in srgb, #4caf50 15%, transparent);color:#4caf50">⚡</span>' : ''}
         </div>
         <div class="bucket-meta">\${esc(t('bucket_files_fmt', b.object_count, formatSize(b.total_size)))}</div>
+        <span onclick="event.stopPropagation();showBucketSettings('\${escJs(b.name)}')" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);padding:8px;cursor:pointer;color:var(--hint);font-size:18px" title="\${esc(t('bucket_settings'))}">&#9881;</span>
       </div>
     \`).join('');
   } catch (e) {
@@ -364,6 +366,107 @@ async function doCreateBucket() {
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = t('create'); }
     toast(t('create_failed', e.message));
+  }
+}
+
+function showBucketSettings(name) {
+  const bkt = buckets.find(b => b.name === name);
+  if (!bkt) return;
+  var cfg = null;
+  try { cfg = bkt.optimize_config ? JSON.parse(bkt.optimize_config) : null; } catch {}
+  var isPublic = !!bkt.is_public;
+  var optEnabled = cfg && cfg.enabled;
+  var optFmt = (cfg && cfg.format) || 'auto';
+  var optQ = (cfg && cfg.quality) || 80;
+  var optW = (cfg && cfg.maxWidth) || 2048;
+
+  showModal(
+    '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>' +
+    '<h3>' + esc(t('bucket_settings')) + ': ' + esc(name) + '</h3>' +
+
+    '<div class="form-group" style="margin-top:12px">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
+        '<input type="checkbox" id="bsPublic"' + (isPublic ? ' checked' : '') + ' style="width:18px;height:18px"> ' +
+        esc(t('bucket_public')) +
+      '</label>' +
+    '</div>' +
+
+    '<hr style="border:none;border-top:1px solid var(--secondary-bg);margin:12px 0">' +
+
+    '<div class="form-group">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
+        '<input type="checkbox" id="bsOptEnable"' + (optEnabled ? ' checked' : '') + ' style="width:18px;height:18px"> ' +
+        '<strong>' + esc(t('bucket_optimize')) + '</strong>' +
+      '</label>' +
+      '<div style="font-size:11px;color:var(--hint);margin-top:4px">' + esc(t('bucket_optimize_desc')) + '</div>' +
+    '</div>' +
+
+    '<div id="bsOptFields" style="' + (optEnabled ? '' : 'opacity:0.4;pointer-events:none') + '">' +
+      '<div class="form-group">' +
+        '<label>' + esc(t('bucket_optimize_format')) + '</label>' +
+        '<select id="bsOptFmt" style="width:100%;padding:8px 10px;border:1px solid var(--secondary-bg);border-radius:8px;font-size:16px;background:var(--bg);color:var(--text)">' +
+          '<option value="auto"' + (optFmt === 'auto' ? ' selected' : '') + '>Auto (AVIF/WebP)</option>' +
+          '<option value="webp"' + (optFmt === 'webp' ? ' selected' : '') + '>WebP</option>' +
+          '<option value="avif"' + (optFmt === 'avif' ? ' selected' : '') + '>AVIF</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label>' + esc(t('bucket_optimize_quality')) + ': <span id="bsOptQVal">' + optQ + '</span></label>' +
+        '<input type="range" id="bsOptQ" min="1" max="100" value="' + optQ + '" style="width:100%" oninput="document.getElementById(\\\'bsOptQVal\\\').textContent=this.value">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label>' + esc(t('bucket_optimize_maxwidth')) + '</label>' +
+        '<input type="number" id="bsOptW" value="' + optW + '" min="100" max="4096" step="1">' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--hint);margin-top:2px">' + esc(t('bucket_optimize_original_hint')) + '</div>' +
+    '</div>' +
+
+    '<button class="btn" style="width:100%;margin-top:12px" onclick="saveBucketSettings(\\'' + escJs(name) + '\\')">' + esc(t('save')) + '</button>'
+  );
+
+  // Toggle optimize fields visibility
+  document.getElementById('bsOptEnable').onchange = function() {
+    var fields = document.getElementById('bsOptFields');
+    if (this.checked) { fields.style.opacity = '1'; fields.style.pointerEvents = 'auto'; }
+    else { fields.style.opacity = '0.4'; fields.style.pointerEvents = 'none'; }
+  };
+}
+
+async function saveBucketSettings(name) {
+  var bkt = buckets.find(function(b) { return b.name === name; });
+  if (!bkt) return;
+  var isPublic = document.getElementById('bsPublic').checked;
+  var optEnabled = document.getElementById('bsOptEnable').checked;
+
+  var body = {};
+  // Only send is_public if changed
+  if ((!!bkt.is_public) !== isPublic) {
+    body.is_public = isPublic;
+  }
+
+  if (optEnabled) {
+    body.optimize_config = {
+      enabled: true,
+      format: document.getElementById('bsOptFmt').value,
+      quality: parseInt(document.getElementById('bsOptQ').value) || 80,
+      maxWidth: parseInt(document.getElementById('bsOptW').value) || 2048,
+    };
+  } else {
+    body.optimize_config = null;
+  }
+
+  try {
+    await apiFetch('/api/miniapp/bucket?name=' + encodeURIComponent(name), {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    bkt.is_public = isPublic ? 1 : 0;
+    bkt.optimize_config = optEnabled ? JSON.stringify(body.optimize_config) : null;
+    toast(t('bucket_optimize_saved'));
+    closeModal();
+    loadBuckets();
+  } catch (e) {
+    toast(e.message);
   }
 }
 

@@ -1,4 +1,4 @@
-import type { Env, S3Request, ObjectRow } from '../types';
+import type { Env, S3Request, ObjectRow, OptimizeConfig } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { uploadToTelegram, RateLimitError, FileTooLargeError } from '../telegram/upload';
 import { TelegramClient } from '../telegram/client';
@@ -144,6 +144,15 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
   // Auto-trigger media processing if VPS is available
   if (env.VPS_URL) {
     ctx.waitUntil(triggerMediaProcessing(s3.bucket, s3.key, result.tgFileId, contentType, env));
+    // Auto-generate optimized derivative if bucket has optimize_config
+    if (bucket.optimize_config) {
+      try {
+        const optCfg: OptimizeConfig = JSON.parse(bucket.optimize_config);
+        if (optCfg.enabled) {
+          ctx.waitUntil(generateOptimizedVariant(bucket, s3.bucket, s3.key, result.tgFileId, contentType, optCfg, env));
+        }
+      } catch { /* invalid config, skip */ }
+    }
   }
 
   const putHeaders: Record<string, string> = { 'ETag': etag };
@@ -172,6 +181,49 @@ async function triggerMediaProcessing(
     const vps = new VpsClient(env);
     await vps.submitJob({ bucket, key, tgFileId, jobType });
   } catch (e) { console.warn(`Media processing trigger failed for ${bucket}/${key}:`, e); }
+}
+
+async function generateOptimizedVariant(
+  bucket: { tg_chat_id: string; tg_topic_id: number | null },
+  bucketName: string, key: string, tgFileId: string, contentType: string,
+  config: OptimizeConfig, env: Env,
+): Promise<void> {
+  // Only process images (skip SVG, skip derivatives)
+  if (!contentType.startsWith('image/') || contentType.includes('svg')) return;
+  if (key.includes('._derivatives/')) return;
+
+  try {
+    const { VpsClient } = await import('../media/vps-client');
+    const vps = new VpsClient(env);
+    const store = new MetadataStore(env);
+
+    // For format 'auto', pre-generate WebP (best compatibility/compression)
+    const format = config.format === 'auto' ? 'webp' : config.format;
+    const quality = config.quality.toString();
+    const width = config.maxWidth.toString();
+
+    const qualitySuffix = `_q${quality}`;
+    const variantKey = `${key}._derivatives/w${width}${qualitySuffix}_${format}`;
+
+    // Skip if variant already exists (re-upload case handled by cleanupOldObject)
+    const existing = await store.getObject(bucketName, variantKey);
+    if (existing) return;
+
+    const vpsRes = await vps.imageResize(tgFileId, width, format, quality);
+    const variantData = await vpsRes.arrayBuffer();
+    const variantCt = vpsRes.headers.get('content-type') || `image/${format}`;
+
+    const result = await uploadToTelegram(variantData, bucket.tg_chat_id, variantKey.split('/').pop()!, variantCt, env, bucket.tg_topic_id);
+    const etag = await computeEtag(variantData);
+    await store.putObject({
+      bucket: bucketName, key: variantKey, size: variantData.byteLength, etag,
+      contentType: variantCt, tgChatId: result.tgChatId, tgMessageId: result.tgMessageId,
+      tgFileId: result.tgFileId, tgFileUniqueId: result.tgFileUniqueId,
+      derivedFrom: key,
+    });
+  } catch (e) {
+    console.warn(`Optimized variant generation failed for ${bucketName}/${key}:`, e);
+  }
 }
 
 export async function readBody(s3: S3Request): Promise<ArrayBuffer | null> {
