@@ -21,6 +21,20 @@ interface TgUpdate {
     video?: { file_id: string; file_unique_id: string; file_name?: string; file_size?: number; mime_type?: string };
     audio?: { file_id: string; file_unique_id: string; file_name?: string; file_size?: number; mime_type?: string };
     voice?: { file_id: string; file_unique_id: string; file_size?: number; duration: number; mime_type?: string };
+    successful_payment?: {
+      currency: string;
+      total_amount: number;
+      invoice_payload: string;
+      telegram_payment_charge_id: string;
+      provider_payment_charge_id: string;
+    };
+  };
+  pre_checkout_query?: {
+    id: string;
+    from: { id: number; first_name: string; language_code?: string };
+    currency: string;
+    total_amount: number;
+    invoice_payload: string;
   };
   callback_query?: {
     id: string;
@@ -32,6 +46,14 @@ interface TgUpdate {
 
 export async function handleWebhook(request: Request, env: Env): Promise<Response> {
   const update = await request.json() as TgUpdate;
+
+  // Handle pre_checkout_query (Telegram Stars payment pre-check)
+  if (update.pre_checkout_query) {
+    const { answerPreCheckoutQuery } = await import('../subscription/payment');
+    // Always approve Stars pre-checkout queries (validation already done at invoice creation)
+    await answerPreCheckoutQuery(update.pre_checkout_query.id, true, env);
+    return new Response('ok');
+  }
 
   // Handle callback queries (inline keyboard button presses)
   if (update.callback_query) {
@@ -47,6 +69,17 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 
   // Only process commands from private chats (not from channels/groups)
   if (msg.chat.type !== 'private') return new Response('ok');
+
+  // Handle successful_payment (Telegram Stars payment confirmation)
+  if (msg.successful_payment) {
+    const payment = msg.successful_payment;
+    const userId = msg.from?.id?.toString() || chatId;
+    const { processSuccessfulPayment } = await import('../subscription/payment');
+    const { PRO_DURATION_DAYS } = await import('../subscription/tiers');
+    await processSuccessfulPayment(userId, payment.total_amount, payment.telegram_payment_charge_id, env);
+    await sendMessage(chatId, botT(lang, 'payment_success', payment.total_amount, PRO_DURATION_DAYS), env);
+    return new Response('ok');
+  }
 
   if (msg.text && msg.text.startsWith('/')) {
     const baseUrl = new URL(request.url).origin;
@@ -276,7 +309,17 @@ interface UploadResponse {
 
 async function handleFileUpload(file: FileInfo, chatId: string, lang: Lang, env: Env): Promise<UploadResponse> {
   const store = new MetadataStore(env);
-  const buckets = await store.listBuckets();
+
+  // User isolation: only list user's own buckets
+  const { SubscriptionStore } = await import('../subscription/store');
+  const { getTierLimits } = await import('../subscription/tiers');
+  const subStore = new SubscriptionStore(env);
+  const tier = await subStore.getActiveTier(chatId);
+  const limits = getTierLimits(tier);
+
+  const allBuckets = await store.listBuckets();
+  // Filter to user's own buckets (or legacy buckets without owner)
+  const buckets = allBuckets.filter(b => !b.owner_user_id || b.owner_user_id === chatId);
   if (buckets.length === 0) {
     return { text: botT(lang, 'no_bucket') };
   }
@@ -284,6 +327,11 @@ async function handleFileUpload(file: FileInfo, chatId: string, lang: Lang, env:
   // Use user's preferred bucket, or fall back to the first bucket
   const preferred = await getDefaultBucket(chatId, env);
   const bucket = (preferred && buckets.find(b => b.name === preferred)) || buckets[0];
+
+  // Tier enforcement: check file count limit
+  if (limits.maxFilesPerBucket > 0 && bucket.object_count >= limits.maxFilesPerBucket) {
+    return { text: botT(lang, 'tier_limit_files', limits.maxFilesPerBucket) };
+  }
 
   // Size precheck: reject files >20MB when VPS is not configured (can't be downloaded via S3 API)
   if (file.fileSize > BOT_API_GETFILE_LIMIT && !env.VPS_URL) {
@@ -432,7 +480,7 @@ export async function registerWebhook(workerUrl: string, env: Env): Promise<bool
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: webhookUrl,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: ['message', 'callback_query', 'pre_checkout_query'],
       secret_token: await deriveWebhookSecret(env.TG_BOT_TOKEN),
     }),
   });
@@ -441,7 +489,8 @@ export async function registerWebhook(workerUrl: string, env: Env): Promise<bool
 
   const cmdKeys = [
     'buckets', 'ls', 'info', 'search', 'share', 'shares',
-    'revoke', 'delete', 'stats', 'setbucket', 'miniapp', 'help',
+    'revoke', 'delete', 'stats', 'setbucket', 'miniapp',
+    'subscribe', 'status', 'help',
   ];
 
   // Set default commands (English)

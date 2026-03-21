@@ -5,6 +5,10 @@ import { MetadataStore } from '../storage/metadata';
 import { createShareToken } from '../sharing/tokens';
 import { sendMessageWithKeyboard } from './webhook';
 import { formatSize, escHtml } from '../utils/format';
+import { SubscriptionStore } from '../subscription/store';
+import { sendSubscriptionInvoice } from '../subscription/payment';
+import { getTierLimits, PRO_STARS_PRICE } from '../subscription/tiers';
+import { checkFeatureAccess } from '../subscription/middleware';
 
 export interface BotReply {
   text: string;
@@ -88,7 +92,7 @@ export async function handleBotCommand(text: string, chatId: string, env: Env, b
       return objectInfoCmd(args, env, lang);
 
     case '/share':
-      return shareCmd(args, env, lang, baseUrl);
+      return shareCmd(args, chatId, env, lang, baseUrl);
 
     case '/shares':
       return listSharesCmd(args, env, lang, baseUrl);
@@ -110,6 +114,12 @@ export async function handleBotCommand(text: string, chatId: string, env: Env, b
 
     case '/setbucket':
       return setBucketCmd(args, chatId, env, lang);
+
+    case '/subscribe':
+      return subscribeCmd(chatId, env, lang);
+
+    case '/status':
+      return statusCmd(chatId, env, lang);
 
     default:
       return null;
@@ -210,8 +220,14 @@ async function objectInfoCmd(args: string[], env: Env, lang: Lang): Promise<stri
     escHtml(obj.content_type), escHtml(obj.etag), obj.last_modified);
 }
 
-async function shareCmd(args: string[], env: Env, lang: Lang, baseUrl?: string): Promise<string> {
+async function shareCmd(args: string[], chatId: string, env: Env, lang: Lang, baseUrl?: string): Promise<string> {
   if (args.length < 2) return botT(lang, 'usage_share');
+
+  // Tier enforcement: share links require Pro
+  const subStore = new SubscriptionStore(env);
+  const tier = await subStore.getActiveTier(chatId);
+  const featureErr = checkFeatureAccess(tier, 'shareLinks');
+  if (featureErr) return botT(lang, 'tier_limit_feature', 'Share links');
   const bucket = args[0];
   // Parse optional trailing params from the end to support keys with spaces.
   let keyEndIdx = args.length;
@@ -395,6 +411,60 @@ async function setBucketCmd(args: string[], chatId: string, env: Env, lang: Lang
 
   await store.setUserPref(chatId, 'default_bucket', name);
   return botT(lang, 'setbucket_done', escHtml(name));
+}
+
+async function subscribeCmd(chatId: string, env: Env, lang: Lang): Promise<string | null> {
+  const subStore = new SubscriptionStore(env);
+  const tier = await subStore.getActiveTier(chatId);
+
+  if (tier === 'pro') {
+    const sub = await subStore.getSubscription(chatId);
+    const expiresAt = sub?.expires_at ? new Date(sub.expires_at).toLocaleDateString() : '?';
+    return botT(lang, 'already_pro', expiresAt);
+  }
+
+  // Send Stars invoice
+  const success = await sendSubscriptionInvoice(chatId, env);
+  if (!success) {
+    return botT(lang, 'invoice_failed');
+  }
+  return null; // Invoice sent as a separate message
+}
+
+async function statusCmd(chatId: string, env: Env, lang: Lang): Promise<string> {
+  const subStore = new SubscriptionStore(env);
+  const tier = await subStore.getActiveTier(chatId);
+  const sub = await subStore.getSubscription(chatId);
+  const limits = getTierLimits(tier);
+
+  const store = new MetadataStore(env);
+  const allBuckets = await store.listBuckets();
+  // Count user's buckets (owned or legacy)
+  const userBuckets = allBuckets.filter(b => !b.owner_user_id || b.owner_user_id === chatId);
+  const totalFiles = userBuckets.reduce((s, b) => s + b.object_count, 0);
+  const totalSize = userBuckets.reduce((s, b) => s + b.total_size, 0);
+
+  let statusText = botT(lang, 'status_header', tier.toUpperCase());
+  if (tier === 'pro' && sub?.expires_at) {
+    statusText += botT(lang, 'status_expires', new Date(sub.expires_at).toLocaleDateString());
+  }
+  statusText += botT(lang, 'status_usage',
+    userBuckets.length, limits.maxBuckets || '∞',
+    totalFiles, limits.maxFilesPerBucket || '∞',
+    formatSize(totalSize),
+  );
+  statusText += botT(lang, 'status_features',
+    limits.encryption ? '✅' : '❌',
+    limits.imageOptimization ? '✅' : '❌',
+    limits.customCredentials ? '✅' : '❌',
+    limits.shareLinks ? '✅' : '❌',
+  );
+
+  if (tier === 'free') {
+    statusText += botT(lang, 'status_upgrade_hint', PRO_STARS_PRICE);
+  }
+
+  return statusText;
 }
 
 async function miniAppCmd(chatId: string, env: Env, lang: Lang, baseUrl?: string): Promise<string | null> {

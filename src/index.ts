@@ -301,7 +301,15 @@ export default {
       }
     } catch (e) { console.error('Cron: lifecycle evaluation failed:', e); }
 
-    console.log(`Cron cleanup: ${expiredShares} expired shares, ${orphanedShares} orphaned shares, ${staleUploads} stale multipart uploads, ${inconsistent} inconsistent objects, ${r2Cleaned} stale R2 cache entries, ${expiredAttempts} expired password attempts, ${orphanedChunks} orphaned chunks, ${lifecycleDeleted} lifecycle-expired objects`);
+    // Expire subscriptions past their expiry date
+    let expiredSubs = 0;
+    try {
+      const { SubscriptionStore } = await import('./subscription/store');
+      const subStore = new SubscriptionStore(env);
+      expiredSubs = await subStore.cleanExpiredSubscriptions();
+    } catch (e) { console.error('Cron: cleanExpiredSubscriptions failed:', e); }
+
+    console.log(`Cron cleanup: ${expiredShares} expired shares, ${orphanedShares} orphaned shares, ${staleUploads} stale multipart uploads, ${inconsistent} inconsistent objects, ${r2Cleaned} stale R2 cache entries, ${expiredAttempts} expired password attempts, ${orphanedChunks} orphaned chunks, ${lifecycleDeleted} lifecycle-expired objects, ${expiredSubs} expired subscriptions`);
   },
 };
 
@@ -676,8 +684,15 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
   const method = request.method;
   const store = new MetadataStore(env);
 
-  // GET /api/miniapp/buckets
+  // GET /api/miniapp/buckets (user-isolated)
   if (path === '/api/miniapp/buckets' && method === 'GET') {
+    const { getUserContext, listUserBuckets } = await import('./subscription/middleware');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      const buckets = await listUserBuckets(userCtx.userId, env);
+      return Response.json(buckets);
+    }
+    // Fallback: if no user context (legacy/single-tenant), return all
     const buckets = await store.listBuckets();
     return Response.json(buckets);
   }
@@ -736,7 +751,7 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json({ deleted, failed });
   }
 
-  // POST /api/miniapp/share
+  // POST /api/miniapp/share (with tier enforcement for share links)
   if (path === '/api/miniapp/share' && method === 'POST') {
     let body: {
       bucket: string; key: string; expiresIn?: number;
@@ -744,6 +759,15 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
     if (!body.bucket || !body.key) return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+
+    // Tier enforcement: share links require Pro
+    const { getUserContext, checkFeatureAccess } = await import('./subscription/middleware');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      const featureErr = checkFeatureAccess(userCtx.tier, 'shareLinks');
+      if (featureErr) return Response.json({ error: featureErr }, { status: 403 });
+    }
+
     const obj = await store.getObject(body.bucket, body.key);
     if (!obj) return Response.json({ error: 'Object not found' }, { status: 404 });
     const { createShareToken } = await import('./sharing/tokens');
@@ -796,11 +820,20 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json({ bucketCount: buckets.length, totalFiles, totalSize });
   }
 
-  // POST /api/miniapp/bucket - create bucket
+  // POST /api/miniapp/bucket - create bucket (with tier enforcement + user ownership)
   if (path === '/api/miniapp/bucket' && method === 'POST') {
     let body: { name: string };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
     if (!body.name) return Response.json({ error: 'name required' }, { status: 400 });
+
+    // Tier enforcement: check bucket creation limit
+    const { getUserContext, checkBucketCreationLimit } = await import('./subscription/middleware');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      const limitErr = await checkBucketCreationLimit(userCtx.userId, userCtx.tier, env);
+      if (limitErr) return Response.json({ error: limitErr }, { status: 403 });
+    }
+
     // Reuse S3 CreateBucket handler via internal S3Request
     const s3: S3Request = {
       method: 'PUT', bucket: body.name, key: '',
@@ -809,6 +842,11 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     };
     const res = await handleCreateBucket(s3, env);
     if (res.status === 200) {
+      // Set bucket ownership
+      if (userCtx) {
+        await env.DB.prepare('UPDATE buckets SET owner_user_id = ? WHERE name = ? AND owner_user_id IS NULL')
+          .bind(userCtx.userId, body.name).run();
+      }
       return Response.json({ name: body.name, created: true });
     }
     // Parse error from XML response
@@ -818,12 +856,27 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json({ error: msgMatch?.[1] || codeMatch?.[1] || 'Failed' }, { status: res.status });
   }
 
-  // PATCH /api/miniapp/bucket?name=... - update bucket settings
+  // PATCH /api/miniapp/bucket?name=... - update bucket settings (with tier enforcement)
   if (path === '/api/miniapp/bucket' && method === 'PATCH') {
     const name = url.searchParams.get('name');
     if (!name) return Response.json({ error: 'name required' }, { status: 400 });
     let body: { is_public?: boolean; default_encryption?: boolean; optimize_config?: { enabled: boolean; format: string; quality: number; maxWidth: number } | null };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+
+    // Tier enforcement for premium features
+    const { getUserContext, checkFeatureAccess } = await import('./subscription/middleware');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      if (body.default_encryption !== undefined && body.default_encryption) {
+        const err = checkFeatureAccess(userCtx.tier, 'encryption');
+        if (err) return Response.json({ error: err }, { status: 403 });
+      }
+      if (body.optimize_config !== undefined && body.optimize_config !== null) {
+        const err = checkFeatureAccess(userCtx.tier, 'imageOptimization');
+        if (err) return Response.json({ error: err }, { status: 403 });
+      }
+    }
+
     if (body.is_public !== undefined) {
       await store.updateBucketPublicAccess(name, body.is_public);
     }
@@ -849,6 +902,17 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     const bucket = url.searchParams.get('bucket');
     const key = url.searchParams.get('key');
     if (!bucket || !key) return Response.json({ error: 'bucket and key required' }, { status: 400 });
+
+    // Tier enforcement: check file upload limit and bucket ownership
+    const { getUserContext, checkFileUploadLimit, userOwnsBucket } = await import('./subscription/middleware');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      const owns = await userOwnsBucket(userCtx.userId, bucket, env);
+      if (!owns) return Response.json({ error: 'Access denied: you do not own this bucket' }, { status: 403 });
+      const limitErr = await checkFileUploadLimit(userCtx.userId, userCtx.tier, bucket, env);
+      if (limitErr) return Response.json({ error: limitErr }, { status: 403 });
+    }
+
     const s3: S3Request = {
       method: 'PUT', bucket, key,
       query: new URLSearchParams(),
@@ -901,12 +965,21 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json(masked);
   }
 
-  // POST /api/miniapp/credential - create new credential
+  // POST /api/miniapp/credential - create new credential (with tier enforcement)
   if (path === '/api/miniapp/credential' && method === 'POST') {
+    // Tier enforcement: custom credentials require Pro
+    const { getUserContext, checkFeatureAccess } = await import('./subscription/middleware');
+    const { getTierLimits } = await import('./subscription/tiers');
+    const userCtx = await getUserContext(request, env);
+    if (userCtx) {
+      const featureErr = checkFeatureAccess(userCtx.tier, 'customCredentials');
+      if (featureErr) return Response.json({ error: featureErr }, { status: 403 });
+    }
     // Limit total credentials to prevent abuse
+    const maxCreds = userCtx ? getTierLimits(userCtx.tier).maxCredentials : 100;
     const credCount = await store.countCredentials();
-    if (credCount >= 100) {
-      return Response.json({ error: 'Maximum number of credentials (100) reached' }, { status: 400 });
+    if (credCount >= maxCreds) {
+      return Response.json({ error: `Maximum number of credentials (${maxCreds}) reached` }, { status: 400 });
     }
     let body: { name?: string; buckets?: string; permission?: string };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
@@ -976,6 +1049,36 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     const ok = await store.deleteCredential(accessKeyId);
     credentialCache.delete(accessKeyId);
     return Response.json({ ok });
+  }
+
+  // GET /api/miniapp/subscription - get current user's subscription status
+  if (path === '/api/miniapp/subscription' && method === 'GET') {
+    const { getUserContext } = await import('./subscription/middleware');
+    const { getTierLimits, PRO_STARS_PRICE } = await import('./subscription/tiers');
+    const { SubscriptionStore } = await import('./subscription/store');
+    const userCtx = await getUserContext(request, env);
+    if (!userCtx) return Response.json({ error: 'Cannot determine user' }, { status: 400 });
+    const subStore = new SubscriptionStore(env);
+    const sub = await subStore.getSubscription(userCtx.userId);
+    const limits = getTierLimits(userCtx.tier);
+    return Response.json({
+      userId: userCtx.userId,
+      tier: userCtx.tier,
+      subscription: sub,
+      limits,
+      starsPrice: PRO_STARS_PRICE,
+    });
+  }
+
+  // POST /api/miniapp/subscription/invoice - create Stars invoice link for Mini App
+  if (path === '/api/miniapp/subscription/invoice' && method === 'POST') {
+    const { getUserContext } = await import('./subscription/middleware');
+    const { createInvoiceLink } = await import('./subscription/payment');
+    const userCtx = await getUserContext(request, env);
+    if (!userCtx) return Response.json({ error: 'Cannot determine user' }, { status: 400 });
+    const invoiceUrl = await createInvoiceLink(env);
+    if (!invoiceUrl) return Response.json({ error: 'Failed to create invoice' }, { status: 500 });
+    return Response.json({ url: invoiceUrl });
   }
 
   return Response.json({ error: 'Not found' }, { status: 404 });

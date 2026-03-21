@@ -43,6 +43,7 @@ export interface BucketRow {
   is_public: number;
   optimize_config: string | null;  // JSON: OptimizeConfig
   default_encryption: number;      // 0 or 1: auto-encrypt uploads with SSE-S3
+  owner_user_id: string | null;    // Telegram user ID of the bucket owner (multi-tenant)
 }
 
 export interface OptimizeConfig {
@@ -107,6 +108,7 @@ export interface CredentialRow {
   created_at: string;
   last_used_at: string | null;
   is_active: number;
+  owner_user_id: string | null;  // Telegram user ID of the credential owner (multi-tenant)
 }
 
 // Resolved credential context for authorization

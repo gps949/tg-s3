@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS buckets (
     description     TEXT,
     object_count    INTEGER NOT NULL DEFAULT 0,
     total_size      INTEGER NOT NULL DEFAULT 0,
-    is_public       INTEGER NOT NULL DEFAULT 0
+    is_public       INTEGER NOT NULL DEFAULT 0,
+    owner_user_id   TEXT               -- Telegram user ID of bucket owner (multi-tenant)
 );
 
 CREATE TABLE IF NOT EXISTS objects (
@@ -115,7 +116,8 @@ CREATE TABLE IF NOT EXISTS credentials (
     permission          TEXT    NOT NULL DEFAULT 'admin',
     created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     last_used_at        TEXT,
-    is_active           INTEGER NOT NULL DEFAULT 1
+    is_active           INTEGER NOT NULL DEFAULT 1,
+    owner_user_id       TEXT               -- Telegram user ID of credential owner (multi-tenant)
 );
 
 -- S3 Object Tagging: up to 10 key-value pairs per object
@@ -142,6 +144,21 @@ CREATE TABLE IF NOT EXISTS lifecycle_rules (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lifecycle_bucket ON lifecycle_rules (bucket);
+
+-- User subscriptions for Telegram Stars payment tiers
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+    user_id         TEXT    PRIMARY KEY,     -- Telegram user ID
+    tier            TEXT    NOT NULL DEFAULT 'free',  -- 'free' or 'pro'
+    starts_at       TEXT    NOT NULL,
+    expires_at      TEXT,                    -- NULL for free tier
+    stars_paid      INTEGER NOT NULL DEFAULT 0,
+    payment_id      TEXT,                    -- Telegram payment charge_id
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_expires ON user_subscriptions (expires_at);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_tier ON user_subscriptions (tier);
 
 -- [Phase 2 预留] 分块上传/下载实现时需要的 objects 表扩展:
 -- ALTER TABLE objects ADD COLUMN is_chunked INTEGER NOT NULL DEFAULT 0;

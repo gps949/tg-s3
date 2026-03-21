@@ -120,6 +120,8 @@ body {
 .badge-perm { background: color-mix(in srgb, var(--link) 15%, transparent); color: var(--link); }
 .secret-reveal { background: var(--bg); border: 1px solid var(--secondary-bg); border-radius: 8px; padding: 12px; margin: 12px 0; word-break: break-all; font-family: monospace; font-size: 13px; }
 .secret-warning { background: color-mix(in srgb, #ff9800 10%, transparent); border: 1px solid #ff9800; border-radius: 8px; padding: 10px; margin: 8px 0; font-size: 13px; color: #e65100; }
+.sub-plan-card { padding: 16px; margin: 8px 0; border-radius: 10px; background: var(--secondary-bg); border-left: 4px solid var(--hint); }
+.sub-plan-card.pro { border-left-color: #4caf50; }
 </style>
 </head>
 <body>
@@ -140,12 +142,14 @@ body {
   <div class="tab" data-view="files" id="tabFiles"></div>
   <div class="tab" data-view="shares" id="tabShares"></div>
   <div class="tab" data-view="keys" id="tabKeys"></div>
+  <div class="tab" data-view="subscription" id="tabSubscription"></div>
 </div>
 
 <div id="bucketsView" class="view active"></div>
 <div id="filesView" class="view"></div>
 <div id="sharesView" class="view"></div>
 <div id="keysView" class="view"></div>
+<div id="subscriptionView" class="view"></div>
 
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal" id="modalContent"></div>
@@ -180,6 +184,7 @@ function setLang(lang) {
     else if (view === 'files' && currentBucket) loadFiles();
     else if (view === 'shares') loadShares();
     else if (view === 'keys') loadKeys();
+    else if (view === 'subscription') loadSubscription();
   }
 }
 
@@ -189,6 +194,7 @@ function applyStaticLabels() {
   document.getElementById('tabFiles').textContent = t('tab_files');
   document.getElementById('tabShares').textContent = t('tab_shares');
   document.getElementById('tabKeys').textContent = t('tab_keys');
+  document.getElementById('tabSubscription').textContent = t('tab_subscription') || 'Plan';
   document.title = t('app_title');
 }
 
@@ -244,6 +250,7 @@ function setupTabs() {
       window.scrollTo(0, 0);
       if (tab.dataset.view === 'shares') loadShares();
       if (tab.dataset.view === 'keys') loadKeys();
+      if (tab.dataset.view === 'subscription') loadSubscription();
     });
   });
 }
@@ -1883,6 +1890,115 @@ async function doDeleteKey(accessKeyId) {
     loadKeys();
   } catch (e) {
     toast(t('delete_failed', e.message));
+  }
+}
+
+// ── Subscription View ──────────────────────────────────────────────
+let subscriptionData = null;
+
+async function loadSubscription() {
+  const el = document.getElementById('subscriptionView');
+  el.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
+  try {
+    const data = await apiFetch('/api/miniapp/subscription');
+    subscriptionData = data;
+    renderSubscription(data);
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + esc(t('load_failed', e.message)) + '<br><br><button class="btn btn-sm btn-outline" onclick="loadSubscription()">' + esc(t('retry')) + '</button></div>';
+  }
+}
+
+function renderSubscription(data) {
+  const el = document.getElementById('subscriptionView');
+  const isPro = data.tier === 'pro';
+  const sub = data.subscription;
+  const limits = data.limits;
+  const starsPrice = data.starsPrice || 200;
+
+  let expiryStr = '';
+  if (isPro && sub && sub.expires_at) {
+    const d = new Date(sub.expires_at);
+    const isExpired = d < new Date();
+    expiryStr = isExpired
+      ? '<span style="color:var(--destructive)">' + esc(t('sub_expired')) + '</span>'
+      : esc(t('sub_expires', d.toLocaleDateString()));
+  }
+
+  const tierLabel = isPro ? t('sub_pro') : t('sub_free');
+  const tierColor = isPro ? '#4caf50' : 'var(--hint)';
+
+  const features = [
+    { key: 'sub_feature_buckets', free: '1', pro: t('sub_unlimited') },
+    { key: 'sub_feature_files', free: '1,000', pro: t('sub_unlimited') },
+    { key: 'sub_feature_encryption', free: '❌', pro: '✅' },
+    { key: 'sub_feature_optimization', free: '❌', pro: '✅' },
+    { key: 'sub_feature_credentials', free: '❌', pro: '✅' },
+    { key: 'sub_feature_shares', free: '❌', pro: '✅' },
+  ];
+
+  let html = '<div style="padding:8px 0">';
+
+  // Current plan card
+  html += '<div class="bucket-card" style="border-left:4px solid ' + tierColor + '">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+  html += '<div><div style="font-size:12px;color:var(--hint)">' + esc(t('sub_current_plan')) + '</div>';
+  html += '<div style="font-size:20px;font-weight:700;color:' + tierColor + '">' + esc(tierLabel) + '</div></div>';
+  if (isPro && sub) {
+    html += '<div style="text-align:right;font-size:12px">' + expiryStr;
+    if (sub.stars_paid) html += '<br><span style="color:var(--hint)">' + sub.stars_paid + ' ⭐ paid</span>';
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  // Upgrade button (only for free users)
+  if (!isPro) {
+    html += '<button class="btn" style="width:100%;margin:12px 0;padding:14px;font-size:16px" onclick="upgradeToProFromMiniApp()">';
+    html += '⭐ ' + esc(t('sub_upgrade_btn', starsPrice));
+    html += '</button>';
+  }
+
+  // Feature comparison table
+  html += '<div style="margin-top:16px"><div style="font-weight:600;margin-bottom:8px">' + esc(t('sub_features_title')) + '</div>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+  html += '<tr style="border-bottom:1px solid var(--secondary-bg)">';
+  html += '<th style="text-align:left;padding:8px 4px;color:var(--hint)"></th>';
+  html += '<th style="text-align:center;padding:8px 4px;color:var(--hint)">' + esc(t('sub_free')) + '</th>';
+  html += '<th style="text-align:center;padding:8px 4px;color:#4caf50">' + esc(t('sub_pro')) + '</th></tr>';
+
+  features.forEach(f => {
+    const isCurrentRow = isPro ? 'pro' : 'free';
+    html += '<tr style="border-bottom:1px solid var(--secondary-bg)">';
+    html += '<td style="padding:8px 4px">' + esc(t(f.key)) + '</td>';
+    html += '<td style="text-align:center;padding:8px 4px">' + f.free + '</td>';
+    html += '<td style="text-align:center;padding:8px 4px;font-weight:600">' + f.pro + '</td>';
+    html += '</tr>';
+  });
+  html += '</table></div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function upgradeToProFromMiniApp() {
+  try {
+    const data = await apiFetch('/api/miniapp/subscription/invoice', { method: 'POST' });
+    if (data.url) {
+      // Open the Telegram Stars payment link
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.openInvoice(data.url, function(status) {
+          if (status === 'paid') {
+            toast('⭐ ' + t('sub_pro') + '!');
+            setTimeout(() => loadSubscription(), 1000);
+          }
+        });
+      } else {
+        window.open(data.url, '_blank');
+      }
+    } else {
+      toast(data.error || 'Failed to create invoice');
+    }
+  } catch (e) {
+    toast(e.message || 'Payment failed');
   }
 }
 </script>
