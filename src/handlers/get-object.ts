@@ -134,18 +134,30 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
     return handlePartNumberGet(s3, obj, headers, parseInt(partNumberParam, 10), env);
   }
 
-  // Handle image variant requests (w=, fmt=)
+  // Handle image variant requests (w=, fmt=, q=)
   const width = s3.query.get('w');
-  const format = s3.query.get('fmt');
-  if ((width || format) && isImageContentType(obj.content_type) && !obj.content_type.includes('svg')) {
+  let format = s3.query.get('fmt');
+  const quality = s3.query.get('q');
+  const fmtAuto = format === 'auto';
+  if ((width || format || quality) && isImageContentType(obj.content_type) && !obj.content_type.includes('svg')) {
+    // Resolve fmt=auto from Accept header (AVIF > WebP > JPEG)
+    if (fmtAuto) {
+      const accept = s3.headers.get('accept') || '';
+      if (accept.includes('image/avif')) format = 'avif';
+      else if (accept.includes('image/webp')) format = 'webp';
+      else format = 'jpeg';
+    }
     const ALLOWED_FORMATS = ['webp', 'jpeg', 'jpg', 'png', 'avif'];
     if (width && (!/^\d+$/.test(width) || +width < 1 || +width > 4096)) {
       return errorResponse(400, 'InvalidArgument', 'w must be an integer between 1 and 4096.');
     }
     if (format && !ALLOWED_FORMATS.includes(format)) {
-      return errorResponse(400, 'InvalidArgument', `fmt must be one of: ${ALLOWED_FORMATS.join(', ')}.`);
+      return errorResponse(400, 'InvalidArgument', `fmt must be one of: auto, ${ALLOWED_FORMATS.join(', ')}.`);
     }
-    return handleImageVariant(s3, obj, env, store, bucket, width, format, ctx);
+    if (quality && (!/^\d+$/.test(quality) || +quality < 1 || +quality > 100)) {
+      return errorResponse(400, 'InvalidArgument', 'q must be an integer between 1 and 100.');
+    }
+    return handleImageVariant(s3, obj, env, store, bucket, width, format, quality, fmtAuto, ctx);
   }
 
   const rangeHeader = s3.headers.get('range');
@@ -436,22 +448,29 @@ function strip304Headers(h: Record<string, string>): Record<string, string> {
 
 async function handleImageVariant(
   s3: S3Request, obj: ObjectRow,
-  env: Env, store: MetadataStore, bucket: BucketRow, width: string | null, format: string | null, ctx?: ExecutionContext,
+  env: Env, store: MetadataStore, bucket: BucketRow,
+  width: string | null, format: string | null, quality: string | null, fmtAuto: boolean, ctx?: ExecutionContext,
 ): Promise<Response> {
-  const variantKey = `${obj.key}._derivatives/w${width || 'orig'}_${format || 'original'}`;
+  const qualitySuffix = quality ? `_q${quality}` : '';
+  const variantKey = `${obj.key}._derivatives/w${width || 'orig'}${qualitySuffix}_${format || 'original'}`;
+
+  // Vary: Accept ensures CDN caches different fmt=auto results per browser capability
+  const variantHeaders = (ct: string, size?: number): Record<string, string> => {
+    const h: Record<string, string> = {
+      'Content-Type': ct,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Access-Control-Allow-Origin': '*',
+    };
+    if (size !== undefined) h['Content-Length'] = size.toString();
+    if (fmtAuto) h['Vary'] = 'Accept';
+    return h;
+  };
 
   // Check D1 for cached variant
   const cached = await store.getObject(s3.bucket, variantKey);
   if (cached) {
     const tgRes = await downloadFromTelegram(cached.tg_file_id, env);
-    return new Response(tgRes.body, {
-      headers: {
-        'Content-Type': cached.content_type,
-        'Content-Length': cached.size.toString(),
-        'Cache-Control': 'public, max-age=31536000, immutable',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
+    return new Response(tgRes.body, { headers: variantHeaders(cached.content_type, cached.size) });
   }
 
   if (!env.VPS_URL) {
@@ -466,7 +485,7 @@ async function handleImageVariant(
   const vps = new VpsClient(env);
   let vpsRes: Response;
   try {
-    vpsRes = await vps.imageResize(obj.tg_file_id, width, format);
+    vpsRes = await vps.imageResize(obj.tg_file_id, width, format, quality);
   } catch {
     const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
     return new Response(tgRes.body, {
@@ -495,12 +514,5 @@ async function handleImageVariant(
     if (ctx) ctx.waitUntil(cacheVariant);
   }
 
-  return new Response(variantData, {
-    headers: {
-      'Content-Type': variantCt,
-      'Content-Length': variantData.byteLength.toString(),
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      'Access-Control-Allow-Origin': '*',
-    },
-  });
+  return new Response(variantData, { headers: variantHeaders(variantCt, variantData.byteLength) });
 }

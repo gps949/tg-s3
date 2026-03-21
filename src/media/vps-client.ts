@@ -115,12 +115,13 @@ export class VpsClient {
     });
   }
 
-  async imageResize(fileId: string, width?: string | null, format?: string | null): Promise<Response> {
+  async imageResize(fileId: string, width?: string | null, format?: string | null, quality?: string | null): Promise<Response> {
     return this.withRetry(async () => {
       const params = new URLSearchParams();
       params.set('tg_file_id', fileId);
       if (width) params.set('width', width);
       if (format) params.set('format', format);
+      if (quality) params.set('quality', quality);
       const res = await fetch(`${this.baseUrl}/api/image/resize?${params}`, {
         headers: { 'Authorization': `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
