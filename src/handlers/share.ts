@@ -1,4 +1,4 @@
-import type { Env, S3Request } from '../types';
+import type { Env, S3Request, ObjectRow, ShareTokenRow } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { createShareToken, validateShareToken } from '../sharing/tokens';
 import { renderSharePage, renderPasswordPage, renderExpiredPage } from '../sharing/pages';
@@ -78,7 +78,7 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
       if (!existing) return Response.json({ error: 'Not found' }, { status: 404 });
       let body: Record<string, unknown>;
       try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
-      const updates: Record<string, unknown> = {};
+      const updates: Partial<Pick<ShareTokenRow, 'expires_at' | 'password_hash' | 'max_downloads' | 'note'>> = {};
       if (body.expiresIn !== undefined) {
         const expiresIn = body.expiresIn as number;
         if (expiresIn >= 1) {
@@ -100,8 +100,8 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
         const md = body.maxDownloads as number;
         updates.max_downloads = md >= 1 ? md : null;
       }
-      if (body.note !== undefined) updates.note = body.note;
-      await store.updateShareToken(token, updates as any);
+      if (body.note !== undefined) updates.note = (body.note || null) as string | null;
+      await store.updateShareToken(token, updates);
       const updated = await store.getShareToken(token);
       return Response.json(updated);
     }
@@ -236,8 +236,6 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
 
   return fileResponse;
 }
-
-import type { ObjectRow, ShareTokenRow } from '../types';
 
 async function serveFile(obj: ObjectRow, env: Env, disposition: 'inline' | 'attachment', request?: Request): Promise<Response> {
   const filename = obj.key.split('/').pop() || obj.key;
