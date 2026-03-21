@@ -138,6 +138,13 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
     return handlePartNumberGet(s3, obj, headers, parseInt(partNumberParam, 10), env);
   }
 
+  // Auto-convert HEIC/HEIF to web-compatible format (browsers can't display HEIC natively)
+  const isHeic = obj.content_type === 'image/heic' || obj.content_type === 'image/heif';
+  if (isHeic && !s3.query.has('original') && !s3.query.get('fmt') && env.VPS_URL) {
+    s3.query = new URLSearchParams(s3.query);
+    s3.query.set('fmt', 'auto');
+  }
+
   // Handle image variant requests (w=, fmt=, q=)
   const width = s3.query.get('w');
   let format = s3.query.get('fmt');

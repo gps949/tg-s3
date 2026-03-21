@@ -529,7 +529,7 @@ async function loadFiles(append) {
       if (append && lastStartAfter) params.set('startAfter', lastStartAfter);
       const result = await apiFetch('/api/miniapp/objects?' + params);
       items = result.contents.filter(o => !o.key.includes('._derivatives/'));
-      commonPrefixes = result.commonPrefixes;
+      commonPrefixes = result.commonPrefixes.filter(cp => !cp.includes('._derivatives/'));
       isTruncated = result.isTruncated;
     }
 
@@ -979,13 +979,30 @@ async function uploadFiles(files) {
     }
 
     try {
-      const putRes = await fetch(API + '/api/miniapp/upload?bucket=' + encodeURIComponent(currentBucket) + '&key=' + encodeURIComponent(key), {
-        method: 'PUT',
-        headers: { 'Authorization': authHeader, 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
+      await new Promise(function(resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('PUT', API + '/api/miniapp/upload?bucket=' + encodeURIComponent(currentBucket) + '&key=' + encodeURIComponent(key));
+        xhr.setRequestHeader('Authorization', authHeader);
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.upload.onprogress = function(ev) {
+          if (ev.lengthComputable && progress) {
+            var filePct = ev.loaded / ev.total;
+            var overallPct = totalBytes > 0
+              ? Math.round(((uploadedBytes + ev.loaded) / totalBytes) * 100)
+              : Math.round(((i + filePct) / total) * 100);
+            progress.style.width = overallPct + '%';
+            if (detail) detail.textContent = t('uploading_file', file.name, formatSize(ev.loaded) + ' / ' + formatSize(ev.total));
+          }
+        };
+        xhr.onload = function() {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(t('upload_put_failed', xhr.status)));
+        };
+        xhr.onerror = function() { reject(new Error('Network error')); };
+        xhr.ontimeout = function() { reject(new Error('Timeout')); };
+        xhr.timeout = 300000; // 5 min
+        xhr.send(file);
       });
-
-      if (!putRes.ok) throw new Error(t('upload_put_failed', putRes.status));
       done++;
     } catch (e) {
       var reason = e && e.message ? e.message : '';
