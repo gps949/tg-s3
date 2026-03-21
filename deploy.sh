@@ -72,6 +72,32 @@ derive_webhook_secret() {
   node -e "const c=require('crypto');console.log(c.createHmac('sha256',process.env.TG_BOT_TOKEN).update('tg-s3-webhook').digest('hex'))"
 }
 
+# HTTP 请求 (Node.js fetch 替代 curl, Docker 容器内 curl 存在 SSL/CA 兼容性问题)
+_fetch() {
+  local method="GET" url="" body=""
+  local -a headers=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -s) shift ;;
+      -X) method="$2"; shift 2 ;;
+      -H) headers+=("$2"); shift 2 ;;
+      -d) body="$2"; shift 2 ;;
+      *)  url="$1"; shift ;;
+    esac
+  done
+  node -e "
+    (async () => {
+      const [url, method, body, ...hdrs] = process.argv.slice(1);
+      const headers = {};
+      for (const h of hdrs) { const i = h.indexOf(': '); if (i > 0) headers[h.slice(0,i)] = h.slice(i+2); }
+      const opts = { method, headers };
+      if (body) opts.body = body;
+      const r = await fetch(url, opts);
+      process.stdout.write(await r.text());
+    })().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
+  " "$url" "$method" "$body" ${headers[@]+"${headers[@]}"}
+}
+
 # 持久化写入 .env (已有则更新，没有则追加)
 # 使用逐行重写避免 sed 特殊字符转义问题
 persist_env() {
@@ -254,10 +280,10 @@ deploy_cf() {
     step "注册 Telegram Bot Webhook"
     WEBHOOK_URL="$EFFECTIVE_URL/bot/webhook"
     WEBHOOK_SECRET=$(TG_BOT_TOKEN="$TG_BOT_TOKEN" derive_webhook_secret)
-    WEBHOOK_RES=$(curl -s -X POST \
+    WEBHOOK_RES=$(_fetch -X POST \
       "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
       -H "Content-Type: application/json" \
-      -d "{\"url\":\"${WEBHOOK_URL}\",\"secret_token\":\"${WEBHOOK_SECRET}\"}" 2>&1) || WEBHOOK_RES=""
+      -d "{\"url\":\"${WEBHOOK_URL}\",\"secret_token\":\"${WEBHOOK_SECRET}\"}" 2>&1) || true
     if echo "$WEBHOOK_RES" | grep -q '"ok":true'; then
       log "Webhook 注册成功: $WEBHOOK_URL"
     else
@@ -309,7 +335,7 @@ setup_tunnel() {
   local ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-${CF_ACCOUNT_ID:-}}"
   if [ -z "$ACCOUNT_ID" ]; then
     step "获取 Cloudflare Account ID"
-    ACCOUNT_ID=$(curl -s "$CF_API/accounts" -H "$AUTH_HEADER" | \
+    ACCOUNT_ID=$(_fetch "$CF_API/accounts" -H "$AUTH_HEADER" | \
       node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || ACCOUNT_ID=""
     if [ -z "$ACCOUNT_ID" ]; then
       warn "无法获取 Account ID, 请在 .env 中设置 CF_ACCOUNT_ID"
@@ -321,8 +347,8 @@ setup_tunnel() {
   # 检查是否已有同名 tunnel
   step "检查现有 tunnel"
   local LIST_RESP=""
-  LIST_RESP=$(curl -s "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel?name=tg-s3&is_deleted=false" \
-    -H "$AUTH_HEADER" 2>&1) || LIST_RESP=""
+  LIST_RESP=$(_fetch "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel?name=tg-s3&is_deleted=false" \
+    -H "$AUTH_HEADER" 2>&1) || true
   local EXISTING=""
   EXISTING=$(echo "$LIST_RESP" | \
     node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const t=d.result?.find(t=>t.name==='tg-s3'); console.log(t?.id||'')" 2>/dev/null) || EXISTING=""
@@ -344,10 +370,10 @@ setup_tunnel() {
 
     step "创建 Cloudflare Tunnel: tg-s3"
     local CREATE_RESP=""
-    CREATE_RESP=$(curl -s -X POST "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel" \
+    CREATE_RESP=$(_fetch -X POST "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel" \
       -H "$AUTH_HEADER" \
       -H "Content-Type: application/json" \
-      -d '{"name":"tg-s3","config_src":"cloudflare"}' 2>&1) || CREATE_RESP=""
+      -d '{"name":"tg-s3","config_src":"cloudflare"}' 2>&1) || true
     TUNNEL_ID=$(echo "$CREATE_RESP" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.id||'')" 2>/dev/null) || TUNNEL_ID=""
     # 创建响应直接包含 token，无需单独获取
     TUNNEL_TOKEN_FROM_CREATE=$(echo "$CREATE_RESP" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.token||'')" 2>/dev/null) || TUNNEL_TOKEN_FROM_CREATE=""
@@ -365,7 +391,7 @@ setup_tunnel() {
   # 配置 tunnel ingress
   local TUNNEL_HOSTNAME="vps.${CF_CUSTOM_DOMAIN}"
   step "配置 tunnel ingress: $TUNNEL_HOSTNAME -> processor:3000"
-  curl -s -X PUT "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
+  _fetch -X PUT "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
     -H "$AUTH_HEADER" \
     -H "Content-Type: application/json" \
     -d "{\"config\":{\"ingress\":[{\"hostname\":\"$TUNNEL_HOSTNAME\",\"service\":\"http://processor:3000\",\"originRequest\":{\"noTLSVerify\":true}},{\"service\":\"http_status:404\"}]}}" >/dev/null 2>&1 || true
@@ -376,7 +402,7 @@ setup_tunnel() {
   local ZONE_ID=""
   local DOMAIN="$CF_CUSTOM_DOMAIN"
   while [ -n "$DOMAIN" ] && [ -z "$ZONE_ID" ]; do
-    ZONE_ID=$(curl -s "$CF_API/zones?name=$DOMAIN" -H "$AUTH_HEADER" | \
+    ZONE_ID=$(_fetch "$CF_API/zones?name=$DOMAIN" -H "$AUTH_HEADER" | \
       node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || ZONE_ID=""
     if [ -z "$ZONE_ID" ]; then
       DOMAIN="${DOMAIN#*.}"
@@ -386,18 +412,18 @@ setup_tunnel() {
 
   if [ -n "$ZONE_ID" ]; then
     local EXISTING_DNS
-    EXISTING_DNS=$(curl -s "$CF_API/zones/$ZONE_ID/dns_records?name=$TUNNEL_HOSTNAME&type=CNAME" \
+    EXISTING_DNS=$(_fetch "$CF_API/zones/$ZONE_ID/dns_records?name=$TUNNEL_HOSTNAME&type=CNAME" \
       -H "$AUTH_HEADER" | \
       node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result?.[0]?.id||'')" 2>/dev/null) || EXISTING_DNS=""
 
     if [ -n "$EXISTING_DNS" ]; then
-      curl -s -X PUT "$CF_API/zones/$ZONE_ID/dns_records/$EXISTING_DNS" \
+      _fetch -X PUT "$CF_API/zones/$ZONE_ID/dns_records/$EXISTING_DNS" \
         -H "$AUTH_HEADER" \
         -H "Content-Type: application/json" \
         -d "{\"type\":\"CNAME\",\"name\":\"$TUNNEL_HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"proxied\":true}" >/dev/null 2>&1 || true
       log "DNS 记录已更新: $TUNNEL_HOSTNAME"
     else
-      curl -s -X POST "$CF_API/zones/$ZONE_ID/dns_records" \
+      _fetch -X POST "$CF_API/zones/$ZONE_ID/dns_records" \
         -H "$AUTH_HEADER" \
         -H "Content-Type: application/json" \
         -d "{\"type\":\"CNAME\",\"name\":\"$TUNNEL_HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"proxied\":true}" >/dev/null 2>&1 || true
@@ -415,8 +441,8 @@ setup_tunnel() {
   else
     step "获取 tunnel connector token"
     local TOKEN_RESP=""
-    TOKEN_RESP=$(curl -s "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" \
-      -H "$AUTH_HEADER" 2>&1) || TOKEN_RESP=""
+    TOKEN_RESP=$(_fetch "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" \
+      -H "$AUTH_HEADER" 2>&1) || true
     CF_TUNNEL_TOKEN=$(echo "$TOKEN_RESP" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); console.log(d.result||'')" 2>/dev/null) || CF_TUNNEL_TOKEN=""
     if [ -z "$CF_TUNNEL_TOKEN" ]; then
       warn "无法获取 tunnel token"
