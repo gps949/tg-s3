@@ -167,26 +167,6 @@ deploy_cf() {
   npx wrangler d1 execute tg-s3-db --remote --file=src/storage/schema.sql --yes 2>&1 || true
   log "数据库 schema 已应用"
 
-  # 创建初始 S3 凭据 (如果 credentials 表为空)
-  step "检查 S3 凭据"
-  CRED_COUNT=$(npx wrangler d1 execute tg-s3-db --remote --command="SELECT COUNT(*) as cnt FROM credentials" --json --yes 2>&1 | grep -o '"cnt":[0-9]*' | head -1 | grep -o '[0-9]*') || CRED_COUNT=""
-  if [ "$CRED_COUNT" = "0" ] || [ -z "$CRED_COUNT" ]; then
-    INIT_AK="TGS3$(gen_random 16)"
-    INIT_SK="$(gen_random 40)"
-    npx wrangler d1 execute tg-s3-db --remote --command="INSERT OR IGNORE INTO credentials (access_key_id, secret_access_key, name, buckets, permission) VALUES ('$INIT_AK', '$INIT_SK', 'admin', '*', 'admin')" --yes 2>&1 || true
-    log "初始 admin S3 凭据已创建"
-    echo -e "  ${CYAN}Access Key ID:     ${INIT_AK}${NC}"
-    echo -e "  ${CYAN}Secret Access Key:  ${INIT_SK}${NC}"
-    echo -e "  ${YELLOW}请保存以上凭据! 之后可在 Mini App 的 Keys 标签页管理。${NC}"
-    # Store for summary
-    GENERATED_AK="$INIT_AK"
-    GENERATED_SK="$INIT_SK"
-  else
-    log "S3 凭据已存在 ($CRED_COUNT 个), 跳过创建"
-    GENERATED_AK=""
-    GENERATED_SK=""
-  fi
-
   # 设置 secrets (webhook secret 从 TG_BOT_TOKEN 派生，无需单独设置)
   step "配置 Worker secrets"
   echo "$TG_BOT_TOKEN" | npx wrangler secret put TG_BOT_TOKEN 2>&1 || true
@@ -519,30 +499,8 @@ print_summary() {
     fi
   fi
 
-  if [ -n "${GENERATED_AK:-}" ] && [ -n "${GENERATED_SK:-}" ]; then
-    echo ""
-    echo -e "  ${YELLOW}S3 凭据 (首次生成, 请保存!):${NC}"
-    echo "  ─────────────────────────────────────────"
-    echo -e "  Access Key ID:      ${CYAN}${GENERATED_AK}${NC}"
-    echo -e "  Secret Access Key:  ${CYAN}${GENERATED_SK}${NC}"
-    echo "  ─────────────────────────────────────────"
-    echo -e "  之后可在 Telegram Mini App 的 ${CYAN}Keys${NC} 标签页管理凭据"
-    echo ""
-    echo "  rclone 配置示例:"
-    echo "  ─────────────────────────────────────────"
-    echo "  [tg-s3]"
-    echo "  type = s3"
-    echo "  provider = Other"
-    echo "  env_auth = false"
-    echo "  access_key_id = ${GENERATED_AK}"
-    echo "  secret_access_key = ${GENERATED_SK}"
-    echo "  endpoint = ${WORKER_URL:-https://tg-s3.<your-subdomain>.workers.dev}"
-    echo "  acl = private"
-    echo "  ─────────────────────────────────────────"
-  else
-    echo ""
-    echo "  S3 凭据已存在, 可在 Mini App Keys 标签页管理"
-  fi
+  echo ""
+  echo -e "  S3 凭据请在 Telegram Mini App 的 ${CYAN}Keys${NC} 标签页中创建"
 
   echo ""
   echo "  快速验证:"
@@ -563,8 +521,6 @@ echo "  └───────────────────────
 echo -e "${NC}"
 
 # 初始化 summary 变量
-GENERATED_AK=""
-GENERATED_SK=""
 TUNNEL_CONFIGURED=0
 
 validate_required

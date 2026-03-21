@@ -68,7 +68,7 @@ docker compose up -d
 docker compose --profile tunnel up -d
 ```
 
-Le service `deploy` pousse le Worker sur Cloudflare, genere automatiquement les secrets et cree le premier identifiant S3. Consultez `docker compose logs deploy` pour les identifiants.
+Le service `deploy` pousse le Worker sur Cloudflare et genere automatiquement les secrets. Les identifiants S3 peuvent etre crees dans le Mini App Telegram (onglet Keys) selon les besoins.
 
 ### Option 2 : Deploiement manuel
 

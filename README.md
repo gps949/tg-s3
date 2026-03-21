@@ -68,7 +68,7 @@ docker compose up -d
 docker compose --profile tunnel up -d
 ```
 
-The `deploy` service pushes the Worker to Cloudflare, auto-generates secrets, and creates the first S3 credential. Check `docker compose logs deploy` for credentials.
+The `deploy` service pushes the Worker to Cloudflare and auto-generates secrets. S3 credentials can be created in the Telegram Mini App (Keys tab) when needed.
 
 ### Option 2: Manual deployment
 

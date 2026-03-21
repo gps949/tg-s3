@@ -68,7 +68,7 @@ docker compose up -d
 docker compose --profile tunnel up -d
 ```
 
-`deploy` サービスが Worker を Cloudflare にプッシュし、シークレットを自動生成、最初の S3 認証情報を作成します。`docker compose logs deploy` で認証情報を確認してください。
+`deploy` サービスが Worker を Cloudflare にプッシュし、シークレットを自動生成します。S3 認証情報は Telegram Mini App の Keys タブで必要に応じて作成できます。
 
 ### 方法 2: 手動デプロイ
 

@@ -68,7 +68,7 @@ docker compose up -d
 docker compose --profile tunnel up -d
 ```
 
-`deploy` 服务将 Worker 推送到 Cloudflare，自动生成密钥并创建首个 S3 凭据。查看 `docker compose logs deploy` 获取凭据。
+`deploy` 服务将 Worker 推送到 Cloudflare 并自动生成密钥。S3 凭据可在 Telegram Mini App 的 Keys 标签页中按需创建。
 
 ### 方式二：手动部署
 

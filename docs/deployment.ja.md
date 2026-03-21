@@ -67,10 +67,10 @@ docker compose up -d
 ```
 
 2 つのサービスが起動します：
-- **deploy** -- Worker を Cloudflare にプッシュ、D1 認証情報を作成、シークレットを自動生成（1 回実行後に終了）
+- **deploy** -- Worker を Cloudflare にプッシュ、D1 スキーマを初期化、シークレットを自動生成（1 回実行後に終了）
 - **processor** -- 大容量ファイルとメディア処理を担当（常駐）
 
-S3 認証情報はデプロイログに表示されます。クライアント設定のために保存してください：
+デプロイ後、Telegram Mini App の Keys タブで S3 認証情報を作成して S3 クライアントを接続してください。デプロイログでステータスを確認：
 
 ```bash
 docker compose logs deploy

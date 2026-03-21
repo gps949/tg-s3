@@ -67,10 +67,10 @@ docker compose up -d
 ```
 
 Cela demarre deux services :
-- **deploy** -- Pousse le Worker vers Cloudflare, cree les identifiants D1, genere les secrets automatiquement (s'execute une fois, puis s'arrete)
+- **deploy** -- Pousse le Worker vers Cloudflare, initialise le schema D1, genere les secrets automatiquement (s'execute une fois, puis s'arrete)
 - **processor** -- Gere les fichiers volumineux et le traitement multimedia (reste actif en permanence)
 
-Les identifiants S3 sont affiches dans les logs de deploiement. Conservez-les pour la configuration client :
+Apres le deploiement, creez des identifiants S3 dans le Mini App Telegram (onglet Keys) pour connecter les clients S3. Verifiez les logs pour le statut :
 
 ```bash
 docker compose logs deploy

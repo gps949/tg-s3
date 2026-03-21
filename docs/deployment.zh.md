@@ -67,10 +67,10 @@ docker compose up -d
 ```
 
 这将启动两个服务：
-- **deploy** -- 将 Worker 推送到 Cloudflare，创建 D1 凭据，自动生成密钥（运行一次后退出）
+- **deploy** -- 将 Worker 推送到 Cloudflare，初始化 D1 数据库，自动生成密钥（运行一次后退出）
 - **processor** -- 处理大文件和媒体（持续运行）
 
-S3 凭据会在部署日志中显示，请保存用于客户端配置：
+部署完成后，在 Telegram Mini App 的 Keys 标签页中创建 S3 凭据以连接 S3 客户端。查看部署日志确认状态：
 
 ```bash
 docker compose logs deploy

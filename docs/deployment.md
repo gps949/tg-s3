@@ -67,10 +67,10 @@ docker compose up -d
 ```
 
 This starts two services:
-- **deploy** -- Pushes the Worker to Cloudflare, creates D1 credentials, auto-generates secrets (runs once, then exits)
+- **deploy** -- Pushes the Worker to Cloudflare, initializes D1 schema, auto-generates secrets (runs once, then exits)
 - **processor** -- Handles large files and media processing (stays running)
 
-S3 credentials are displayed in the deploy logs. Save them for client configuration:
+After deployment, create S3 credentials in the Telegram Mini App (Keys tab) to connect S3 clients. Check deploy logs for status:
 
 ```bash
 docker compose logs deploy
