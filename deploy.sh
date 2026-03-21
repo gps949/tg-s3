@@ -250,21 +250,6 @@ deploy_cf() {
   echo "$VPS_SECRET" | npx wrangler secret put VPS_SECRET 2>&1 || true
   log "Secrets 配置完成"
 
-  # 配置自定义域名路由 (wrangler deploy 会自动创建 DNS 和证书)
-  if [ -n "${CF_CUSTOM_DOMAIN:-}" ]; then
-    if ! grep -q "custom_domain = true" wrangler.toml 2>/dev/null; then
-      cat >> wrangler.toml <<ROUTE_EOF
-
-[[routes]]
-pattern = "${CF_CUSTOM_DOMAIN}"
-custom_domain = true
-ROUTE_EOF
-      log "已添加自定义域名路由: $CF_CUSTOM_DOMAIN"
-    else
-      log "自定义域名路由已存在"
-    fi
-  fi
-
   # 部署 Worker
   step "部署 Worker"
   if ! DEPLOY_OUTPUT=$(npx wrangler deploy 2>&1); then
