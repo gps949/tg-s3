@@ -1556,7 +1556,7 @@ async function toggleKeyStatus(accessKeyId, newStatus) {
   try {
     await apiFetch('/api/miniapp/credential?accessKeyId=' + encodeURIComponent(accessKeyId), {
       method: 'PATCH',
-      body: JSON.stringify({ is_active: newStatus }),
+      body: JSON.stringify({ is_active: newStatus === 'active' ? 1 : 0 }),
     });
     toast(t('key_status_updated'));
     loadKeys();

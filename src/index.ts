@@ -669,6 +669,7 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     const masked = creds.map(c => ({
       ...c,
       secret_access_key: c.secret_access_key.slice(0, 4) + '****' + c.secret_access_key.slice(-4),
+      status: c.is_active ? 'active' : 'inactive',
     }));
     return Response.json(masked);
   }
