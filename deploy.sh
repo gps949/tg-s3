@@ -277,7 +277,8 @@ setup_tunnel() {
 
   # 检查是否已有同名 tunnel
   step "检查现有 tunnel"
-  local EXISTING=$(curl -sf "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel?name=tg-s3&is_deleted=false" \
+  local EXISTING=""
+  EXISTING=$(curl -sf "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel?name=tg-s3&is_deleted=false" \
     -H "$AUTH_HEADER" | \
     node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const t=d.result?.find(t=>t.name==='tg-s3'); console.log(t?.id||'')" 2>/dev/null) || EXISTING=""
 
@@ -375,8 +376,6 @@ setup_tunnel() {
   # 同步到 Worker secrets
   echo "$VPS_URL" | npx wrangler secret put VPS_URL 2>&1 || true
   log "VPS_URL secret 已更新"
-
-  TUNNEL_CONFIGURED=1
 }
 
 # ============================================================
@@ -576,7 +575,6 @@ echo "  │   Telegram-backed S3 Storage         │"
 echo "  └─────────────────────────────────────┘"
 echo -e "${NC}"
 
-TUNNEL_CONFIGURED=0
 validate_required
 
 if [ "$IN_CONTAINER" -eq 1 ]; then
