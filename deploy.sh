@@ -143,37 +143,43 @@ deploy_cf() {
   fi
   log "Cloudflare 认证正常"
 
-  # 创建 D1 数据库 (优先从 .env 恢复 DB_ID，避免容器内 wrangler.toml 修改丢失)
+  # 获取或创建 D1 数据库 (完全自动，支持重复部署)
+  # 优先级: .env 缓存 > wrangler.toml > 远程查询 > 新建
   CURRENT_DB_ID=$(grep 'database_id' wrangler.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
-  if [ -n "${D1_DATABASE_ID:-}" ] && [ -z "$CURRENT_DB_ID" ]; then
-    # 从 .env 恢复 (上次部署已持久化)
-    DB_ID="$D1_DATABASE_ID"
-    sed_inplace "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
-    log "D1 数据库 ID 已从 .env 恢复: $DB_ID"
-  elif [ -z "$CURRENT_DB_ID" ]; then
-    step "创建 D1 数据库 tg-s3-db"
-    DB_OUTPUT=$(npx wrangler d1 create tg-s3-db 2>&1) || true
+  DB_ID=""
 
-    DB_ID=$(echo "$DB_OUTPUT" | grep -o 'database_id = "[^"]*"' | head -1 | sed 's/database_id = "\(.*\)"/\1/')
+  if [ -n "$CURRENT_DB_ID" ]; then
+    DB_ID="$CURRENT_DB_ID"
+    log "D1 数据库已存在: $DB_ID"
+  elif [ -n "${D1_DATABASE_ID:-}" ]; then
+    DB_ID="$D1_DATABASE_ID"
+    log "D1 数据库 ID 已从 .env 恢复: $DB_ID"
+  else
+    # 先查远程是否已有同名数据库
+    step "查找 D1 数据库 tg-s3-db"
+    DB_ID=$(npx wrangler d1 list --json 2>/dev/null | \
+      node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const db=d.find(x=>x.name==='tg-s3-db'); console.log(db?.uuid||'')" 2>/dev/null) || DB_ID=""
+
     if [ -z "$DB_ID" ]; then
-      # 数据库可能已存在, 尝试从 list 获取
-      DB_ID=$(npx wrangler d1 list 2>&1 | grep 'tg-s3-db' | awk '{print $1}')
+      # 远程没有, 创建新数据库
+      step "创建 D1 数据库 tg-s3-db"
+      DB_OUTPUT=$(npx wrangler d1 create tg-s3-db 2>&1) || true
+      DB_ID=$(echo "$DB_OUTPUT" | grep -o 'database_id = "[^"]*"' | head -1 | sed 's/database_id = "\(.*\)"/\1/')
     fi
 
     if [ -z "$DB_ID" ]; then
       err "无法获取 D1 数据库 ID"
       exit 1
     fi
-
-    # 更新 wrangler.toml
-    sed_inplace "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
-    log "D1 数据库创建成功: $DB_ID"
-  else
-    DB_ID="$CURRENT_DB_ID"
-    log "D1 数据库已存在: $DB_ID"
+    log "D1 数据库: $DB_ID"
   fi
 
-  # 持久化 DB_ID 到 .env (Docker 容器内 wrangler.toml 修改不持久，.env 通过 volume 挂载持久化)
+  # 确保 wrangler.toml 中有正确的 database_id
+  if [ -z "$CURRENT_DB_ID" ]; then
+    sed_inplace "s/database_id = \"\"/database_id = \"$DB_ID\"/" wrangler.toml
+  fi
+
+  # 持久化到 .env (Docker 容器内 wrangler.toml 不持久，.env 通过 volume 持久化)
   persist_env D1_DATABASE_ID "$DB_ID"
 
   # 创建 R2 缓存 bucket
