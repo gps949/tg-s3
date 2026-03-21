@@ -2,7 +2,7 @@ import type { Env, S3Request } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { formatHttpDate, isImageContentType, etagMatches } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
-import { parseSseCHeaders, validateKeyMd5, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError } from '../utils/sse';
+import { parseSseCHeaders, validateKeyMd5, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError, addSseS3ResponseHeaders } from '../utils/sse';
 
 export async function handleHeadObject(s3: S3Request, env: Env): Promise<Response> {
   const store = new MetadataStore(env);
@@ -92,8 +92,9 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
     headers['x-amz-mp-parts-count'] = mpMatch[1];
   }
 
-  // SSE-C response headers
+  // SSE response headers
   addSseResponseHeaders(headers, obj.system_metadata);
+  addSseS3ResponseHeaders(headers, obj.system_metadata);
 
   // Include user metadata before any return path (304, partNumber, or normal)
   if (obj.user_metadata) {

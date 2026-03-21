@@ -145,3 +145,40 @@ export class SseCError extends Error {
     this.name = 'SseCError';
   }
 }
+
+// ── SSE-S3 (Server-Managed Keys) ───────────────────────────────────────
+
+/** Check if an object uses SSE-S3 encryption. */
+export function isEncryptedS3(systemMetadata: string | null): boolean {
+  if (!systemMetadata) return false;
+  try {
+    const meta = JSON.parse(systemMetadata);
+    return meta._sse_s3 === 'AES256';
+  } catch { return false; }
+}
+
+/** Merge SSE-S3 metadata into a system_metadata object. */
+export function addSseS3Metadata(sysMeta: Record<string, string>): Record<string, string> {
+  return { ...sysMeta, _sse_s3: 'AES256' };
+}
+
+/** Add SSE-S3 response header. */
+export function addSseS3ResponseHeaders(headers: Record<string, string>, systemMetadata: string | null): void {
+  if (!systemMetadata) return;
+  try {
+    const meta = JSON.parse(systemMetadata);
+    if (meta._sse_s3 === 'AES256') {
+      headers['x-amz-server-side-encryption'] = 'AES256';
+    }
+  } catch { /* ignore */ }
+}
+
+/** Encrypt with SSE-S3 master key (reuses AES-256-GCM). */
+export async function encryptS3(plaintext: ArrayBuffer, masterKeyBase64: string): Promise<ArrayBuffer> {
+  return encrypt(plaintext, masterKeyBase64);
+}
+
+/** Decrypt with SSE-S3 master key (reuses AES-256-GCM). */
+export async function decryptS3(blob: ArrayBuffer, masterKeyBase64: string): Promise<ArrayBuffer> {
+  return decrypt(blob, masterKeyBase64);
+}

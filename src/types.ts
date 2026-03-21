@@ -10,6 +10,8 @@ export interface Env {
   CACHE?: R2Bucket;
   // Worker public URL for CDN cache purging in cron (e.g. https://tg-s3.example.com)
   WORKER_URL?: string;
+  // SSE-S3 master key (base64-encoded 32 bytes, generated with: openssl rand -base64 32)
+  SSE_MASTER_KEY?: string;
 }
 
 // D1 row types
@@ -40,6 +42,7 @@ export interface BucketRow {
   total_size: number;
   is_public: number;
   optimize_config: string | null;  // JSON: OptimizeConfig
+  default_encryption: number;      // 0 or 1: auto-encrypt uploads with SSE-S3
 }
 
 export interface OptimizeConfig {

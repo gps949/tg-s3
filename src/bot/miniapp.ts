@@ -375,6 +375,7 @@ function showBucketSettings(name) {
   var cfg = null;
   try { cfg = bkt.optimize_config ? JSON.parse(bkt.optimize_config) : null; } catch {}
   var isPublic = !!bkt.is_public;
+  var encEnabled = !!bkt.default_encryption;
   var optEnabled = cfg && cfg.enabled;
   var optFmt = (cfg && cfg.format) || 'auto';
   var optQ = (cfg && cfg.quality) || 80;
@@ -389,6 +390,16 @@ function showBucketSettings(name) {
         '<input type="checkbox" id="bsPublic"' + (isPublic ? ' checked' : '') + ' style="width:18px;height:18px"> ' +
         esc(t('bucket_public')) +
       '</label>' +
+    '</div>' +
+
+    '<hr style="border:none;border-top:1px solid var(--secondary-bg);margin:12px 0">' +
+
+    '<div class="form-group">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">' +
+        '<input type="checkbox" id="bsEncrypt"' + (encEnabled ? ' checked' : '') + ' style="width:18px;height:18px"> ' +
+        '<strong>' + esc(t('bucket_encrypt')) + '</strong>' +
+      '</label>' +
+      '<div style="font-size:11px;color:var(--hint);margin-top:4px">' + esc(t('bucket_encrypt_desc')) + '</div>' +
     '</div>' +
 
     '<hr style="border:none;border-top:1px solid var(--secondary-bg);margin:12px 0">' +
@@ -436,12 +447,17 @@ async function saveBucketSettings(name) {
   var bkt = buckets.find(function(b) { return b.name === name; });
   if (!bkt) return;
   var isPublic = document.getElementById('bsPublic').checked;
+  var encEnabled = document.getElementById('bsEncrypt').checked;
   var optEnabled = document.getElementById('bsOptEnable').checked;
 
   var body = {};
   // Only send is_public if changed
   if ((!!bkt.is_public) !== isPublic) {
     body.is_public = isPublic;
+  }
+  // Only send default_encryption if changed
+  if ((!!bkt.default_encryption) !== encEnabled) {
+    body.default_encryption = encEnabled;
   }
 
   if (optEnabled) {
@@ -461,6 +477,7 @@ async function saveBucketSettings(name) {
       body: JSON.stringify(body),
     });
     bkt.is_public = isPublic ? 1 : 0;
+    bkt.default_encryption = encEnabled ? 1 : 0;
     bkt.optimize_config = optEnabled ? JSON.stringify(body.optimize_config) : null;
     toast(t('bucket_optimize_saved'));
     closeModal();

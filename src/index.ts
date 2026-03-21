@@ -822,10 +822,13 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
   if (path === '/api/miniapp/bucket' && method === 'PATCH') {
     const name = url.searchParams.get('name');
     if (!name) return Response.json({ error: 'name required' }, { status: 400 });
-    let body: { is_public?: boolean; optimize_config?: { enabled: boolean; format: string; quality: number; maxWidth: number } | null };
+    let body: { is_public?: boolean; default_encryption?: boolean; optimize_config?: { enabled: boolean; format: string; quality: number; maxWidth: number } | null };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
     if (body.is_public !== undefined) {
       await store.updateBucketPublicAccess(name, body.is_public);
+    }
+    if (body.default_encryption !== undefined) {
+      await store.updateBucketDefaultEncryption(name, body.default_encryption);
     }
     if (body.optimize_config !== undefined) {
       if (body.optimize_config === null) {

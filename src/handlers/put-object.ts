@@ -7,7 +7,7 @@ import { extractUserMetadata, extractSystemMetadata } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
 import { purgeCdnCache, purgeR2Cache } from './get-object';
 import { deleteDerivatives, deleteChunks } from './delete-object';
-import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError } from '../utils/sse';
+import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError, encryptS3, addSseS3Metadata } from '../utils/sse';
 
 export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const store = new MetadataStore(env);
@@ -59,6 +59,22 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     sysMeta = addSseMetadata(sysMeta || {}, sseParams);
   }
 
+  // SSE-S3: determine if server-side encryption should be applied
+  // Triggered by: x-amz-server-side-encryption: AES256 header, or bucket default_encryption
+  const sseS3Header = s3.headers.get('x-amz-server-side-encryption');
+  const useSseS3 = !sseParams && env.SSE_MASTER_KEY && (
+    sseS3Header === 'AES256' || !!bucket.default_encryption
+  );
+  if (sseS3Header && sseS3Header !== 'AES256') {
+    return errorResponse(400, 'InvalidArgument', 'The encryption method specified is not supported. Supported: AES256.');
+  }
+  if (sseS3Header === 'AES256' && !env.SSE_MASTER_KEY) {
+    return errorResponse(400, 'InvalidArgument', 'SSE-S3 is not configured. Set SSE_MASTER_KEY secret.');
+  }
+  if (useSseS3) {
+    sysMeta = addSseS3Metadata(sysMeta || {});
+  }
+
   // S3 conditional write (2024-08): If-None-Match: * prevents overwriting existing objects
   const ifNoneMatch = s3.headers.get('if-none-match');
   if (ifNoneMatch && ifNoneMatch.trim() === '*') {
@@ -89,13 +105,16 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
       zeroHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
       zeroHeaders['x-amz-server-side-encryption-customer-key-MD5'] = sseParams.keyMd5;
     }
+    if (useSseS3) zeroHeaders['x-amz-server-side-encryption'] = 'AES256';
     return new Response(null, { status: 200, headers: zeroHeaders });
   }
 
-  // SSE-C: encrypt body before uploading to Telegram
+  // Encrypt body before uploading to Telegram (SSE-C or SSE-S3)
   let uploadBody = body;
   if (sseParams && body.byteLength > 0) {
     uploadBody = await encrypt(body, sseParams.keyBase64);
+  } else if (useSseS3 && body.byteLength > 0) {
+    uploadBody = await encryptS3(body, env.SSE_MASTER_KEY!);
   }
 
   let result;
@@ -161,6 +180,7 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     putHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
     putHeaders['x-amz-server-side-encryption-customer-key-MD5'] = sseParams.keyMd5;
   }
+  if (useSseS3) putHeaders['x-amz-server-side-encryption'] = 'AES256';
   return new Response(null, { status: 200, headers: putHeaders });
 }
 

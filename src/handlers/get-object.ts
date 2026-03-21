@@ -7,7 +7,7 @@ import { parseRange, formatHttpDate, isImageContentType, etagMatches } from '../
 import { errorResponse } from '../xml/builder';
 import { BOT_API_GETFILE_LIMIT, R2_CACHE_MIN_SIZE, R2_CACHE_MAX_SIZE } from '../constants';
 import { VpsClient } from '../media/vps-client';
-import { parseSseCHeaders, validateKeyMd5, decrypt, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError } from '../utils/sse';
+import { parseSseCHeaders, validateKeyMd5, decrypt, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError, isEncryptedS3, decryptS3, addSseS3ResponseHeaders } from '../utils/sse';
 
 const MAX_DIRECT_DOWNLOAD = BOT_API_GETFILE_LIMIT;
 
@@ -75,7 +75,7 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   const obj = await store.getObject(s3.bucket, s3.key);
   if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
 
-  // SSE-C: if object is encrypted, require matching SSE-C headers
+  // SSE-C: if object is encrypted with customer key, require matching SSE-C headers
   const objEncrypted = isEncrypted(obj.system_metadata);
   let sseParams: ReturnType<typeof parseSseCHeaders> = null;
   if (objEncrypted) {
@@ -95,6 +95,9 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
     }
   }
 
+  // SSE-S3: object encrypted with server-managed key (auto-decrypt)
+  const objEncryptedS3 = isEncryptedS3(obj.system_metadata);
+
   // Conditional: If-Match (412 if ETag doesn't match)
   const ifMatch = s3.headers.get('if-match');
   if (ifMatch && !etagMatches(ifMatch, obj.etag, true)) {
@@ -111,8 +114,9 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
 
   // Build response headers early so 304 responses include user metadata
   const headers = buildResponseHeaders(obj, s3.query);
-  // Add SSE-C response headers if encrypted
+  // Add SSE response headers
   if (objEncrypted) addSseResponseHeaders(headers, obj.system_metadata);
+  if (objEncryptedS3) addSseS3ResponseHeaders(headers, obj.system_metadata);
 
   // Conditional: If-None-Match (304 if ETag matches)
   const ifNoneMatch = s3.headers.get('if-none-match');
@@ -236,9 +240,11 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
   let data = await tgRes.arrayBuffer();
 
-  // SSE-C: decrypt after download
+  // Decrypt after download (SSE-C or SSE-S3)
   if (objEncrypted && sseParams) {
     data = await decrypt(data, sseParams.keyBase64);
+  } else if (objEncryptedS3 && env.SSE_MASTER_KEY) {
+    data = await decryptS3(data, env.SSE_MASTER_KEY);
   }
 
   if (range) {
@@ -256,7 +262,7 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   // Cache store: CDN + R2 for full non-Range responses (skip for encrypted objects)
   const response = new Response(data, {
     status: 200,
-    headers: { ...headers, 'Content-Length': obj.size.toString(), 'X-Cache': objEncrypted ? 'SSE-C' : 'MISS' },
+    headers: { ...headers, 'Content-Length': obj.size.toString(), 'X-Cache': objEncrypted ? 'SSE-C' : objEncryptedS3 ? 'SSE-S3' : 'MISS' },
   });
   if (ctx && !objEncrypted) {
     const cacheUrl = cacheKeyUrl(s3.url.origin, s3.bucket, s3.key);

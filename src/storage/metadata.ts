@@ -53,6 +53,10 @@ export class MetadataStore {
     await this.db.prepare('UPDATE buckets SET optimize_config = ? WHERE name = ?').bind(config, name).run();
   }
 
+  async updateBucketDefaultEncryption(name: string, enabled: boolean): Promise<void> {
+    await this.db.prepare('UPDATE buckets SET default_encryption = ? WHERE name = ?').bind(enabled ? 1 : 0, name).run();
+  }
+
   async updateBucketStats(bucket: string, sizeDelta: number, countDelta: number): Promise<void> {
     await this.db.prepare(
       'UPDATE buckets SET total_size = MAX(0, total_size + ?), object_count = MAX(0, object_count + ?) WHERE name = ?'
