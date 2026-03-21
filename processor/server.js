@@ -17,6 +17,12 @@ const AUTH_SECRET = process.env.AUTH_SECRET;
 const TG_API = process.env.TG_LOCAL_API || 'https://api.telegram.org';
 const TEMP_DIR = process.env.TEMP_DIR || '/tmp/tg-s3-processor';
 
+// Validate required env vars at startup to fail fast
+const REQUIRED_ENV = { TG_BOT_TOKEN: BOT_TOKEN, AUTH_SECRET };
+for (const [name, value] of Object.entries(REQUIRED_ENV)) {
+  if (!value) { console.error(`FATAL: ${name} is not set`); process.exit(1); }
+}
+
 if (!existsSync(TEMP_DIR)) mkdirSync(TEMP_DIR, { recursive: true });
 
 // Auth middleware
