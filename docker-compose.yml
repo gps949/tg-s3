@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 部署 CF Worker 到 Cloudflare + 启动本地 processor:
   #   docker compose up -d
