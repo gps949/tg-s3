@@ -320,7 +320,7 @@ if (path.startsWith('/share/')) return handleShareAccess(request, url, env);
 - 纯 HTML/CSS/JS (无框架依赖，~1350 行内联代码)
 - Telegram WebApp JS SDK (主题色适配)
 - 部署: Worker 内联提供 (无需 CF Pages)
-- API: 调用 `/api/miniapp/*` 管理 API + `/api/presign` 预签名上传
+- API: 调用 `/api/miniapp/*` 管理 API (上传/下载/预览均通过内部端点，无需 S3 凭据)
 
 ### Mini App API 端点
 
@@ -337,13 +337,17 @@ if (path.startsWith('/share/')) return handleShareAccess(request, url, env);
 | DELETE | `/api/miniapp/share?token=` | 撤销分享 |
 | GET | `/api/miniapp/stats` | 全局统计 |
 | POST | `/api/miniapp/rename` | 重命名/移动文件 (body: `{bucket, oldKey, newKey}`) |
-| POST | `/api/miniapp/presign` | 生成预签名 URL (body: `{bucket, key, method?, expiresIn?}`) |
+| PUT | `/api/miniapp/upload?bucket=&key=` | 直接上传文件 (body 为文件内容，内部调用 PutObject) |
+| GET | `/api/miniapp/download?bucket=&key=` | 直接下载文件 (内部调用 GetObject，支持 `?auth=` 查询参数认证) |
+| POST | `/api/miniapp/presign` | 生成预签名 URL，仅用于"复制预签名链接"功能 (body: `{bucket, key, method?, expiresIn?}`) |
 | GET | `/api/miniapp/credentials?bucket=` | 列出凭证 (secret_access_key 脱敏) |
 | POST | `/api/miniapp/credential` | 创建凭证 (body: `{buckets?, permission?}`) |
 | PATCH | `/api/miniapp/credential` | 更新凭证 (body: `{id, buckets?, permission?}`) |
 | DELETE | `/api/miniapp/credential?id=` | 删除凭证 |
 
-所有端点需认证（Telegram WebApp initData）。
+所有端点需认证（Telegram WebApp initData）。认证方式:
+- `Authorization: Bearer <initData>` 请求头 (JS fetch 调用)
+- `?auth=<initData>` 查询参数 (浏览器直接访问的 URL，如 `img.src`、`window.open`)
 
 ### 核心功能
 
@@ -351,7 +355,7 @@ if (path.startsWith('/share/')) return handleShareAccess(request, url, env);
 |------|------|
 | Bucket 列表 | 显示所有 Bucket 及统计信息 |
 | 文件浏览 | 面包屑导航，delimiter 分组，分页加载 |
-| 拖拽上传 | 多文件拖拽，通过 Presigned URL 上传 |
+| 拖拽上传 | 多文件拖拽，通过 `/api/miniapp/upload` 直接上传 |
 | 图片预览 | 缩略图内联显示 |
 | 批量操作 | 多选删除、多选分享（分享暂限逐个） |
 | 搜索 | 文件名模糊搜索 (服务端 D1 LIKE 查询) |
