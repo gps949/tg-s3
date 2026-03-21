@@ -799,8 +799,8 @@ function triggerUpload() {
 }
 
 document.getElementById('fileInput').addEventListener('change', async function() {
-  const files = this.files;
-  if (!files || files.length === 0) return;
+  const files = Array.from(this.files || []);
+  if (files.length === 0) return;
   this.value = '';
   await uploadFiles(files);
 });
