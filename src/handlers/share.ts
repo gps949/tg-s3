@@ -1,6 +1,6 @@
 import type { Env, S3Request, ObjectRow, ShareTokenRow } from '../types';
 import { MetadataStore } from '../storage/metadata';
-import { createShareToken, validateShareToken } from '../sharing/tokens';
+import { createShareToken, validateShareToken, validateShareTokenWithCookie } from '../sharing/tokens';
 import { renderSharePage, renderPasswordPage, renderExpiredPage } from '../sharing/pages';
 import { downloadFromTelegram } from '../telegram/download';
 import { errorResponse } from '../xml/builder';
@@ -167,8 +167,22 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     } catch { /* not form data */ }
   }
 
+  // If no password provided but session cookie exists (set after prior password verification),
+  // bypass password check by validating the share without password requirement.
+  let hasSessionCookie = false;
+  if (!password) {
+    const cookieName = `sp_${token.slice(0, 16)}`;
+    const cookies = request.headers.get('cookie') || '';
+    const cookieMap = Object.fromEntries(
+      cookies.split(';').map(c => c.trim().split('=').map(s => s.trim())).filter(p => p.length === 2)
+    );
+    hasSessionCookie = cookieMap[cookieName] === '1';
+  }
+
   const clientIp = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '0.0.0.0';
-  const result = await validateShareToken(token, password, env, clientIp);
+  const result = hasSessionCookie
+    ? await validateShareTokenWithCookie(token, env)
+    : await validateShareToken(token, password, env, clientIp);
   const lang = detectLang(request);
 
   if (!result.valid) {

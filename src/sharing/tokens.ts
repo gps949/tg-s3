@@ -85,3 +85,27 @@ export async function validateShareToken(token: string, password: string | null,
 
   return { valid: true, shareToken: share };
 }
+
+// Validate share token when session cookie proves prior password verification.
+// Checks expiry and download limits only, skips password.
+export async function validateShareTokenWithCookie(token: string, env: Env): Promise<{
+  valid: boolean;
+  reason?: string;
+  shareToken?: ShareTokenRow;
+  needsPassword?: boolean;
+  wrongPassword?: boolean;
+  locked?: boolean;
+  lockSeconds?: number;
+  remainingAttempts?: number;
+}> {
+  const store = new MetadataStore(env);
+  const share = await store.getShareToken(token);
+  if (!share) return { valid: false, reason: 'not_found' };
+  if (share.expires_at && new Date(share.expires_at) < new Date()) {
+    return { valid: false, reason: 'expired', shareToken: share };
+  }
+  if (share.max_downloads !== null && share.download_count >= share.max_downloads) {
+    return { valid: false, reason: 'max_downloads', shareToken: share };
+  }
+  return { valid: true, shareToken: share };
+}
