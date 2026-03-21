@@ -7,6 +7,7 @@ import { extractUserMetadata, extractSystemMetadata } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
 import { purgeCdnCache, purgeR2Cache } from './get-object';
 import { deleteDerivatives, deleteChunks } from './delete-object';
+import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError } from '../utils/sse';
 
 export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const store = new MetadataStore(env);
@@ -37,10 +38,26 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     }
   }
 
+  // SSE-C: parse and validate encryption headers
+  let sseParams: ReturnType<typeof parseSseCHeaders> = null;
+  try {
+    sseParams = parseSseCHeaders(s3.headers);
+    if (sseParams) await validateKeyMd5(sseParams);
+  } catch (e) {
+    if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+    throw e;
+  }
+
   const contentType = s3.headers.get('content-type') || 'application/octet-stream';
   const userMeta = extractUserMetadata(s3.headers);
-  const sysMeta = extractSystemMetadata(s3.headers);
+  let sysMeta = extractSystemMetadata(s3.headers);
+  // ETag is always MD5 of plaintext (before encryption)
   const etag = await computeEtag(body);
+
+  // Merge SSE metadata into system metadata
+  if (sseParams) {
+    sysMeta = addSseMetadata(sysMeta || {}, sseParams);
+  }
 
   // S3 conditional write (2024-08): If-None-Match: * prevents overwriting existing objects
   const ifNoneMatch = s3.headers.get('if-none-match');
@@ -68,12 +85,22 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     ctx.waitUntil(purgeR2Cache(env, s3.bucket, s3.key));
     const zeroHeaders: Record<string, string> = { 'ETag': etag };
     if (contentMd5) zeroHeaders['Content-MD5'] = contentMd5;
+    if (sseParams) {
+      zeroHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
+      zeroHeaders['x-amz-server-side-encryption-customer-key-MD5'] = sseParams.keyMd5;
+    }
     return new Response(null, { status: 200, headers: zeroHeaders });
+  }
+
+  // SSE-C: encrypt body before uploading to Telegram
+  let uploadBody = body;
+  if (sseParams && body.byteLength > 0) {
+    uploadBody = await encrypt(body, sseParams.keyBase64);
   }
 
   let result;
   try {
-    result = await uploadToTelegram(body, bucket.tg_chat_id, s3.key, contentType, env, bucket.tg_topic_id);
+    result = await uploadToTelegram(uploadBody, bucket.tg_chat_id, s3.key, contentType, env, bucket.tg_topic_id);
   } catch (e) {
     if (e instanceof FileTooLargeError) {
       return errorResponse(400, 'EntityTooLarge', e.message);
@@ -84,7 +111,7 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     throw e;
   }
 
-  // Save metadata (pass oldObj to avoid redundant getObject query inside putObject)
+  // Save metadata: size is always the plaintext size (S3 convention)
   await store.putObject({
     bucket: s3.bucket, key: s3.key, size: body.byteLength, etag, contentType,
     tgChatId: result.tgChatId, tgMessageId: result.tgMessageId,
@@ -92,6 +119,18 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     userMetadata: Object.keys(userMeta).length > 0 ? userMeta : undefined,
     systemMetadata: sysMeta,
   }, oldObj);
+
+  // x-amz-tagging: set tags inline on PutObject (URL-encoded key=value pairs)
+  const taggingHeader = s3.headers.get('x-amz-tagging');
+  if (taggingHeader) {
+    const tags = taggingHeader.split('&').map(pair => {
+      const [k, v] = pair.split('=');
+      return { key: decodeURIComponent(k || ''), value: decodeURIComponent(v || '') };
+    }).filter(t => t.key);
+    if (tags.length > 0 && tags.length <= 10) {
+      ctx.waitUntil(store.putObjectTags(s3.bucket, s3.key, tags).catch(() => {}));
+    }
+  }
 
   // Async cleanup old TG message + stale derivatives
   if (oldObj) {
@@ -109,6 +148,10 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
 
   const putHeaders: Record<string, string> = { 'ETag': etag };
   if (contentMd5) putHeaders['Content-MD5'] = contentMd5;
+  if (sseParams) {
+    putHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
+    putHeaders['x-amz-server-side-encryption-customer-key-MD5'] = sseParams.keyMd5;
+  }
   return new Response(null, { status: 200, headers: putHeaders });
 }
 

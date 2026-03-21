@@ -2,6 +2,7 @@ import type { Env, S3Request } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { formatHttpDate, isImageContentType, etagMatches } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
+import { parseSseCHeaders, validateKeyMd5, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError } from '../utils/sse';
 
 export async function handleHeadObject(s3: S3Request, env: Env): Promise<Response> {
   const store = new MetadataStore(env);
@@ -9,6 +10,24 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
   if (!bucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
   const obj = await store.getObject(s3.bucket, s3.key);
   if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
+
+  // SSE-C: if object is encrypted, require matching SSE-C headers (AWS behavior)
+  if (isEncrypted(obj.system_metadata)) {
+    try {
+      const sseParams = parseSseCHeaders(s3.headers);
+      if (!sseParams) {
+        return errorResponse(400, 'InvalidRequest', 'The object was stored using SSE-C. You must provide the encryption key headers.');
+      }
+      await validateKeyMd5(sseParams);
+      const storedMd5 = getStoredKeyMd5(obj.system_metadata);
+      if (storedMd5 && sseParams.keyMd5 !== storedMd5) {
+        return errorResponse(403, 'AccessDenied', 'The provided encryption key does not match the key used to encrypt the object.');
+      }
+    } catch (e) {
+      if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+      throw e;
+    }
+  }
 
   // Conditional: If-Match (412 if ETag doesn't match)
   const ifMatch = s3.headers.get('if-match');
@@ -72,6 +91,9 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
   if (mpMatch) {
     headers['x-amz-mp-parts-count'] = mpMatch[1];
   }
+
+  // SSE-C response headers
+  addSseResponseHeaders(headers, obj.system_metadata);
 
   // Include user metadata before any return path (304, partNumber, or normal)
   if (obj.user_metadata) {

@@ -760,4 +760,109 @@ export class MetadataStore {
     const r = await this.db.prepare('SELECT COUNT(*) as cnt FROM credentials').first<{ cnt: number }>();
     return r?.cnt ?? 0;
   }
+
+  // ── Object Tagging ──────────────────────────────────────────────────
+
+  async getObjectTags(bucket: string, key: string): Promise<Array<{ key: string; value: string }>> {
+    const r = await this.db.prepare(
+      'SELECT tag_key, tag_value FROM object_tags WHERE bucket = ? AND key = ? ORDER BY tag_key'
+    ).bind(bucket, key).all<{ tag_key: string; tag_value: string }>();
+    return (r.results || []).map(t => ({ key: t.tag_key, value: t.tag_value }));
+  }
+
+  async putObjectTags(bucket: string, key: string, tags: Array<{ key: string; value: string }>): Promise<void> {
+    const stmts: D1PreparedStatement[] = [
+      this.db.prepare('DELETE FROM object_tags WHERE bucket = ? AND key = ?').bind(bucket, key),
+    ];
+    for (const tag of tags) {
+      stmts.push(
+        this.db.prepare('INSERT INTO object_tags (bucket, key, tag_key, tag_value) VALUES (?, ?, ?, ?)')
+          .bind(bucket, key, tag.key, tag.value)
+      );
+    }
+    await this.db.batch(stmts);
+  }
+
+  async deleteObjectTags(bucket: string, key: string): Promise<void> {
+    await this.db.prepare('DELETE FROM object_tags WHERE bucket = ? AND key = ?').bind(bucket, key).run();
+  }
+
+  // ── Lifecycle Rules ─────────────────────────────────────────────────
+
+  async getLifecycleRules(bucket: string): Promise<Array<{
+    id: string; prefix: string; expirationDays: number;
+    tagKey: string | null; tagValue: string | null; enabled: boolean;
+  }>> {
+    const r = await this.db.prepare(
+      'SELECT id, prefix, expiration_days, tag_key, tag_value, enabled FROM lifecycle_rules WHERE bucket = ? ORDER BY id'
+    ).bind(bucket).all<{ id: string; prefix: string; expiration_days: number; tag_key: string | null; tag_value: string | null; enabled: number }>();
+    return (r.results || []).map(r => ({
+      id: r.id, prefix: r.prefix, expirationDays: r.expiration_days,
+      tagKey: r.tag_key, tagValue: r.tag_value, enabled: !!r.enabled,
+    }));
+  }
+
+  async putLifecycleRules(bucket: string, rules: Array<{
+    id: string; prefix: string; expirationDays: number;
+    tagKey?: string; tagValue?: string; enabled?: boolean;
+  }>): Promise<void> {
+    const stmts: D1PreparedStatement[] = [
+      this.db.prepare('DELETE FROM lifecycle_rules WHERE bucket = ?').bind(bucket),
+    ];
+    for (const rule of rules) {
+      stmts.push(
+        this.db.prepare(
+          'INSERT INTO lifecycle_rules (id, bucket, prefix, expiration_days, tag_key, tag_value, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(rule.id, bucket, rule.prefix, rule.expirationDays, rule.tagKey || null, rule.tagValue || null, rule.enabled !== false ? 1 : 0)
+      );
+    }
+    await this.db.batch(stmts);
+  }
+
+  async deleteLifecycleRules(bucket: string): Promise<void> {
+    await this.db.prepare('DELETE FROM lifecycle_rules WHERE bucket = ?').bind(bucket).run();
+  }
+
+  /** Evaluate lifecycle rules and return expired objects to delete. */
+  async findExpiredObjects(limit = 100): Promise<Array<{ bucket: string; key: string }>> {
+    // Find all enabled rules
+    const rules = await this.db.prepare(
+      'SELECT id, bucket, prefix, expiration_days, tag_key, tag_value FROM lifecycle_rules WHERE enabled = 1'
+    ).all<{ id: string; bucket: string; prefix: string; expiration_days: number; tag_key: string | null; tag_value: string | null }>();
+
+    if (!rules.results?.length) return [];
+
+    const expired: Array<{ bucket: string; key: string }> = [];
+    const now = Date.now();
+
+    for (const rule of rules.results) {
+      const cutoff = new Date(now - rule.expiration_days * 86400000).toISOString();
+
+      let query: string;
+      let binds: unknown[];
+
+      if (rule.tag_key) {
+        // Rule with tag filter: join with object_tags
+        query = `SELECT o.bucket, o.key FROM objects o
+          INNER JOIN object_tags t ON t.bucket = o.bucket AND t.key = o.key
+          WHERE o.bucket = ? AND o.key >= ? AND o.key < ? AND o.last_modified < ?
+          AND t.tag_key = ? AND t.tag_value = ?
+          AND o.derived_from IS NULL
+          LIMIT ?`;
+        binds = [rule.bucket, rule.prefix, rule.prefix + '\uffff', cutoff, rule.tag_key, rule.tag_value, limit - expired.length];
+      } else {
+        query = `SELECT bucket, key FROM objects
+          WHERE bucket = ? AND key >= ? AND key < ? AND last_modified < ?
+          AND derived_from IS NULL
+          LIMIT ?`;
+        binds = [rule.bucket, rule.prefix, rule.prefix + '\uffff', cutoff, limit - expired.length];
+      }
+
+      const r = await this.db.prepare(query).bind(...binds).all<{ bucket: string; key: string }>();
+      if (r.results) expired.push(...r.results);
+      if (expired.length >= limit) break;
+    }
+
+    return expired.slice(0, limit);
+  }
 }

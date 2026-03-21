@@ -7,6 +7,7 @@ import { parseRange, formatHttpDate, isImageContentType, etagMatches } from '../
 import { errorResponse } from '../xml/builder';
 import { BOT_API_GETFILE_LIMIT, R2_CACHE_MIN_SIZE, R2_CACHE_MAX_SIZE } from '../constants';
 import { VpsClient } from '../media/vps-client';
+import { parseSseCHeaders, validateKeyMd5, decrypt, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError } from '../utils/sse';
 
 const MAX_DIRECT_DOWNLOAD = BOT_API_GETFILE_LIMIT;
 
@@ -74,6 +75,26 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   const obj = await store.getObject(s3.bucket, s3.key);
   if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
 
+  // SSE-C: if object is encrypted, require matching SSE-C headers
+  const objEncrypted = isEncrypted(obj.system_metadata);
+  let sseParams: ReturnType<typeof parseSseCHeaders> = null;
+  if (objEncrypted) {
+    try {
+      sseParams = parseSseCHeaders(s3.headers);
+      if (!sseParams) {
+        return errorResponse(400, 'InvalidRequest', 'The object was stored using SSE-C. You must provide the encryption key headers.');
+      }
+      await validateKeyMd5(sseParams);
+      const storedMd5 = getStoredKeyMd5(obj.system_metadata);
+      if (storedMd5 && sseParams.keyMd5 !== storedMd5) {
+        return errorResponse(403, 'AccessDenied', 'The provided encryption key does not match the key used to encrypt the object.');
+      }
+    } catch (e) {
+      if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+      throw e;
+    }
+  }
+
   // Conditional: If-Match (412 if ETag doesn't match)
   const ifMatch = s3.headers.get('if-match');
   if (ifMatch && !etagMatches(ifMatch, obj.etag, true)) {
@@ -90,6 +111,8 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
 
   // Build response headers early so 304 responses include user metadata
   const headers = buildResponseHeaders(obj, s3.query);
+  // Add SSE-C response headers if encrypted
+  if (objEncrypted) addSseResponseHeaders(headers, obj.system_metadata);
 
   // Conditional: If-None-Match (304 if ETag matches)
   const ifNoneMatch = s3.headers.get('if-none-match');
@@ -141,8 +164,9 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
     });
   }
 
+  // Skip CDN/R2 cache for SSE-C encrypted objects (cache doesn't know the key)
   // CDN Cache: try serving from CF edge cache for non-Range full GETs of <=20MB files
-  if (!rangeHeader && obj.size > 0 && obj.size <= MAX_DIRECT_DOWNLOAD) {
+  if (!objEncrypted && !rangeHeader && obj.size > 0 && obj.size <= MAX_DIRECT_DOWNLOAD) {
     const cache = caches.default;
     const cacheUrl = cacheKeyUrl(s3.url.origin, s3.bucket, s3.key);
     const cacheReq = new Request(cacheUrl);
@@ -159,7 +183,7 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   }
 
   // R2 Cache: try serving from R2 persistent cache (survives CDN eviction)
-  if (env.CACHE && !rangeHeader && isR2Cacheable(obj.size)) {
+  if (!objEncrypted && env.CACHE && !rangeHeader && isR2Cacheable(obj.size)) {
     try {
       const r2Obj = await env.CACHE.get(r2CacheKey(s3.bucket, s3.key));
       if (r2Obj && r2Obj.customMetadata?.etag === obj.etag) {
@@ -198,7 +222,12 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
 
   // <=20MB: download from TG directly (Range by slicing, acceptable for small files)
   const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
-  const data = await tgRes.arrayBuffer();
+  let data = await tgRes.arrayBuffer();
+
+  // SSE-C: decrypt after download
+  if (objEncrypted && sseParams) {
+    data = await decrypt(data, sseParams.keyBase64);
+  }
 
   if (range) {
     const sliced = data.slice(range.start, range.end + 1);
@@ -212,12 +241,12 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
     });
   }
 
-  // Cache store: CDN + R2 for full non-Range responses
+  // Cache store: CDN + R2 for full non-Range responses (skip for encrypted objects)
   const response = new Response(data, {
     status: 200,
-    headers: { ...headers, 'Content-Length': obj.size.toString(), 'X-Cache': 'MISS' },
+    headers: { ...headers, 'Content-Length': obj.size.toString(), 'X-Cache': objEncrypted ? 'SSE-C' : 'MISS' },
   });
-  if (ctx) {
+  if (ctx && !objEncrypted) {
     const cacheUrl = cacheKeyUrl(s3.url.origin, s3.bucket, s3.key);
     ctx.waitUntil(caches.default.put(new Request(cacheUrl), response.clone()).catch(e => console.error('CDN cache put failed:', e)));
     // Store to R2 persistent cache (only for files within cacheable size range)

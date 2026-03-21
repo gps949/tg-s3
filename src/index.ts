@@ -261,7 +261,25 @@ export default {
       }
     } catch (e) { console.error('Cron: cleanOrphanedChunks failed:', e); }
 
-    console.log(`Cron cleanup: ${expiredShares} expired shares, ${orphanedShares} orphaned shares, ${staleUploads} stale multipart uploads, ${inconsistent} inconsistent objects, ${r2Cleaned} stale R2 cache entries, ${expiredAttempts} expired password attempts, ${orphanedChunks} orphaned chunks`);
+    // Lifecycle rules: delete expired objects
+    let lifecycleDeleted = 0;
+    try {
+      const expired = await store.findExpiredObjects(50);
+      for (const obj of expired) {
+        try {
+          const objRow = await store.getObject(obj.bucket, obj.key);
+          if (!objRow) continue;
+          await store.deleteObject(obj.bucket, obj.key);
+          const cronBaseUrl = env.WORKER_URL
+            ? (env.WORKER_URL.startsWith('http') ? env.WORKER_URL : `https://${env.WORKER_URL}`)
+            : '';
+          await cleanupDeletedObject(obj.bucket, obj.key, objRow, cronBaseUrl, env, store);
+          lifecycleDeleted++;
+        } catch (e) { console.warn(`Lifecycle: failed to delete ${obj.bucket}/${obj.key}:`, e); }
+      }
+    } catch (e) { console.error('Cron: lifecycle evaluation failed:', e); }
+
+    console.log(`Cron cleanup: ${expiredShares} expired shares, ${orphanedShares} orphaned shares, ${staleUploads} stale multipart uploads, ${inconsistent} inconsistent objects, ${r2Cleaned} stale R2 cache entries, ${expiredAttempts} expired password attempts, ${orphanedChunks} orphaned chunks, ${lifecycleDeleted} lifecycle-expired objects`);
   },
 };
 
@@ -351,7 +369,7 @@ function authorize(auth: AuthContext, bucket: string, operation: S3Operation): A
   }
   // Check operation permission
   if (auth.permission === 'admin') return null;
-  const readOps: S3Operation[] = ['GetObject', 'HeadObject', 'ListObjectsV2', 'ListObjects', 'ListBuckets', 'HeadBucket', 'GetBucketLocation', 'GetBucketVersioning', 'ListParts', 'ListMultipartUploads'];
+  const readOps: S3Operation[] = ['GetObject', 'HeadObject', 'ListObjectsV2', 'ListObjects', 'ListBuckets', 'HeadBucket', 'GetBucketLocation', 'GetBucketVersioning', 'ListParts', 'ListMultipartUploads', 'GetObjectTagging', 'GetBucketLifecycleConfiguration'];
   if (auth.permission === 'readonly' && !readOps.includes(operation)) {
     return { status: 403, code: 'AccessDenied', message: 'Access Denied: read-only credential.' };
   }
@@ -371,7 +389,7 @@ function authorize(auth: AuthContext, bucket: string, operation: S3Operation): A
 // silently corrupt data (e.g. PUT ?acl would overwrite the object with
 // the ACL XML body).
 const UNSUPPORTED_SUBRESOURCES = new Set([
-  'acl', 'tagging', 'policy', 'cors', 'lifecycle', 'encryption',
+  'acl', 'policy', 'cors', 'encryption',
   'notification', 'replication', 'website', 'logging', 'analytics',
   'metrics', 'inventory', 'accelerate', 'requestPayment',
   'object-lock', 'legal-hold', 'retention', 'torrent', 'restore',
@@ -398,6 +416,9 @@ function routeS3Request(s3: S3Request): S3Operation | null {
     if (method === 'GET' && query.has('location')) return 'GetBucketLocation';
     if (method === 'GET' && query.has('versioning')) return 'GetBucketVersioning';
     if (method === 'GET' && query.has('uploads')) return 'ListMultipartUploads';
+    if (method === 'GET' && query.has('lifecycle')) return 'GetBucketLifecycleConfiguration';
+    if (method === 'PUT' && query.has('lifecycle')) return 'PutBucketLifecycleConfiguration';
+    if (method === 'DELETE' && query.has('lifecycle')) return 'DeleteBucketLifecycleConfiguration';
     // Block unsupported bucket sub-resource operations before falling to ListObjects
     if (hasUnsupportedSubresource(query)) return null;
     if (method === 'GET' && query.get('list-type') === '2') return 'ListObjectsV2';
@@ -413,6 +434,7 @@ function routeS3Request(s3: S3Request): S3Operation | null {
   // they fall through to data operations (prevents data corruption)
   if (method === 'GET') {
     if (query.has('uploadId')) return 'ListParts';
+    if (query.has('tagging')) return 'GetObjectTagging';
     if (hasUnsupportedSubresource(query)) return null;
     return 'GetObject';
   }
@@ -425,6 +447,7 @@ function routeS3Request(s3: S3Request): S3Operation | null {
   if (method === 'PUT') {
     if (query.has('partNumber') && headers.get('x-amz-copy-source')) return 'UploadPartCopy';
     if (query.has('partNumber')) return 'UploadPart';
+    if (query.has('tagging')) return 'PutObjectTagging';
     if (hasUnsupportedSubresource(query)) return null;
     if (headers.get('x-amz-copy-source')) return 'CopyObject';
     return 'PutObject';
@@ -432,6 +455,7 @@ function routeS3Request(s3: S3Request): S3Operation | null {
 
   if (method === 'DELETE') {
     if (query.has('uploadId')) return 'AbortMultipartUpload';
+    if (query.has('tagging')) return 'DeleteObjectTagging';
     if (hasUnsupportedSubresource(query)) return null;
     return 'DeleteObject';
   }
@@ -443,6 +467,123 @@ function routeS3Request(s3: S3Request): S3Operation | null {
   }
 
   return null;
+}
+
+// ── Object Tagging handlers ─────────────────────────────────────────
+
+async function handleGetObjectTagging(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  const obj = await store.getObject(s3.bucket, s3.key);
+  if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
+  const tags = await store.getObjectTags(s3.bucket, s3.key);
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>${
+    tags.map(t => `<Tag><Key>${escXml(t.key)}</Key><Value>${escXml(t.value)}</Value></Tag>`).join('')
+  }</TagSet></Tagging>`;
+  return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
+}
+
+async function handlePutObjectTagging(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  const obj = await store.getObject(s3.bucket, s3.key);
+  if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
+  if (!s3.body) return errorResponse(400, 'MalformedXML', 'Request body is empty.');
+  const bodyText = await new Response(s3.body).text();
+  const tags = parseTaggingXml(bodyText);
+  if (tags.length > 10) return errorResponse(400, 'BadRequest', 'Object tags cannot exceed 10.');
+  for (const t of tags) {
+    if (t.key.length > 128) return errorResponse(400, 'InvalidTag', 'Tag key exceeds 128 characters.');
+    if (t.value.length > 256) return errorResponse(400, 'InvalidTag', 'Tag value exceeds 256 characters.');
+  }
+  await store.putObjectTags(s3.bucket, s3.key, tags);
+  return new Response(null, { status: 200 });
+}
+
+async function handleDeleteObjectTagging(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  await store.deleteObjectTags(s3.bucket, s3.key);
+  return new Response(null, { status: 204 });
+}
+
+function parseTaggingXml(xml: string): Array<{ key: string; value: string }> {
+  const tags: Array<{ key: string; value: string }> = [];
+  const tagRegex = /<Tag>\s*<Key>([^<]*)<\/Key>\s*<Value>([^<]*)<\/Value>\s*<\/Tag>/g;
+  let match;
+  while ((match = tagRegex.exec(xml)) !== null) {
+    tags.push({ key: unescXml(match[1]), value: unescXml(match[2]) });
+  }
+  return tags;
+}
+
+function escXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function unescXml(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+}
+
+// ── Bucket Lifecycle handlers ───────────────────────────────────────
+
+async function handleGetBucketLifecycle(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  const bucket = await store.getBucket(s3.bucket);
+  if (!bucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
+  const rules = await store.getLifecycleRules(s3.bucket);
+  if (rules.length === 0) {
+    return errorResponse(404, 'NoSuchLifecycleConfiguration', 'The lifecycle configuration does not exist.');
+  }
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${
+    rules.map(r => `<Rule><ID>${escXml(r.id)}</ID><Filter>${
+      r.prefix ? `<Prefix>${escXml(r.prefix)}</Prefix>` : ''
+    }${r.tagKey ? `<Tag><Key>${escXml(r.tagKey)}</Key><Value>${escXml(r.tagValue || '')}</Value></Tag>` : ''
+    }</Filter><Status>${r.enabled ? 'Enabled' : 'Disabled'}</Status><Expiration><Days>${r.expirationDays}</Days></Expiration></Rule>`).join('')
+  }</LifecycleConfiguration>`;
+  return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
+}
+
+async function handlePutBucketLifecycle(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  const bucket = await store.getBucket(s3.bucket);
+  if (!bucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
+  if (!s3.body) return errorResponse(400, 'MalformedXML', 'Request body is empty.');
+  const bodyText = await new Response(s3.body).text();
+  const rules = parseLifecycleXml(bodyText);
+  if (rules.length > 100) return errorResponse(400, 'BadRequest', 'Lifecycle rules cannot exceed 100.');
+  await store.putLifecycleRules(s3.bucket, rules);
+  return new Response(null, { status: 200 });
+}
+
+async function handleDeleteBucketLifecycle(s3: S3Request, env: Env): Promise<Response> {
+  const store = new MetadataStore(env);
+  await store.deleteLifecycleRules(s3.bucket);
+  return new Response(null, { status: 204 });
+}
+
+function parseLifecycleXml(xml: string): Array<{
+  id: string; prefix: string; expirationDays: number;
+  tagKey?: string; tagValue?: string; enabled?: boolean;
+}> {
+  const rules: Array<{ id: string; prefix: string; expirationDays: number; tagKey?: string; tagValue?: string; enabled?: boolean }> = [];
+  const ruleRegex = /<Rule>([\s\S]*?)<\/Rule>/g;
+  let match;
+  while ((match = ruleRegex.exec(xml)) !== null) {
+    const ruleXml = match[1];
+    const id = ruleXml.match(/<ID>([^<]*)<\/ID>/)?.[1] || crypto.randomUUID();
+    const prefix = ruleXml.match(/<Prefix>([^<]*)<\/Prefix>/)?.[1] || '';
+    const days = parseInt(ruleXml.match(/<Days>(\d+)<\/Days>/)?.[1] || '0', 10);
+    const tagKey = ruleXml.match(/<Tag>\s*<Key>([^<]*)<\/Key>/)?.[1];
+    const tagValue = ruleXml.match(/<Value>([^<]*)<\/Value>/)?.[1];
+    const status = ruleXml.match(/<Status>([^<]*)<\/Status>/)?.[1];
+    if (days > 0) {
+      rules.push({
+        id: unescXml(id), prefix: unescXml(prefix), expirationDays: days,
+        tagKey: tagKey ? unescXml(tagKey) : undefined,
+        tagValue: tagValue ? unescXml(tagValue) : undefined,
+        enabled: status !== 'Disabled',
+      });
+    }
+  }
+  return rules;
 }
 
 async function dispatchS3(op: S3Operation, s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -468,6 +609,12 @@ async function dispatchS3(op: S3Operation, s3: S3Request, env: Env, ctx: Executi
     case 'AbortMultipartUpload': return handleAbortMultipartUpload(s3, env, ctx);
     case 'ListParts': return handleListParts(s3, env);
     case 'ListMultipartUploads': return handleListMultipartUploads(s3, env);
+    case 'GetObjectTagging': return handleGetObjectTagging(s3, env);
+    case 'PutObjectTagging': return handlePutObjectTagging(s3, env);
+    case 'DeleteObjectTagging': return handleDeleteObjectTagging(s3, env);
+    case 'GetBucketLifecycleConfiguration': return handleGetBucketLifecycle(s3, env);
+    case 'PutBucketLifecycleConfiguration': return handlePutBucketLifecycle(s3, env);
+    case 'DeleteBucketLifecycleConfiguration': return handleDeleteBucketLifecycle(s3, env);
     default: return errorResponse(400, 'InvalidRequest', `Unknown operation: ${op}`);
   }
 }

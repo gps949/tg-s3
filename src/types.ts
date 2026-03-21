@@ -144,7 +144,13 @@ export type S3Operation =
   | 'CompleteMultipartUpload'
   | 'AbortMultipartUpload'
   | 'ListParts'
-  | 'ListMultipartUploads';
+  | 'ListMultipartUploads'
+  | 'GetObjectTagging'
+  | 'PutObjectTagging'
+  | 'DeleteObjectTagging'
+  | 'GetBucketLifecycleConfiguration'
+  | 'PutBucketLifecycleConfiguration'
+  | 'DeleteBucketLifecycleConfiguration';
 
 // Telegram API types
 export interface TgFileResponse {

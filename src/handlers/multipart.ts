@@ -12,6 +12,7 @@ import { initiateMultipartXml, completeMultipartXml, listPartsXml, listMultipart
 import { BOT_API_GETFILE_LIMIT, VPS_SINGLE_FILE_MAX, S3_MIN_PART_SIZE, S3_MAX_KEYS_DEFAULT, S3_MAX_PART_NUMBER } from '../constants';
 import { VpsClient } from '../media/vps-client';
 import { parseCompleteMultipart } from '../xml/parser';
+import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError } from '../utils/sse';
 
 function clampInt(val: string | null, defaultVal: number, min: number, max: number): number {
   const n = parseInt(val || String(defaultVal), 10);
@@ -25,16 +26,32 @@ export async function handleCreateMultipartUpload(s3: S3Request, env: Env): Prom
   const bucket = await store.getBucket(s3.bucket);
   if (!bucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
 
+  // SSE-C: parse and validate encryption headers, store in upload metadata
+  let sseParams: ReturnType<typeof parseSseCHeaders> = null;
+  try {
+    sseParams = parseSseCHeaders(s3.headers);
+    if (sseParams) await validateKeyMd5(sseParams);
+  } catch (e) {
+    if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+    throw e;
+  }
+
   const uploadId = crypto.randomUUID();
   const contentType = s3.headers.get('content-type') || 'application/octet-stream';
   const userMeta = extractUserMetadata(s3.headers);
   const metaJson = Object.keys(userMeta).length > 0 ? JSON.stringify(userMeta) : undefined;
-  const sysMeta = extractSystemMetadata(s3.headers);
+  let sysMeta = extractSystemMetadata(s3.headers);
+  if (sseParams) sysMeta = addSseMetadata(sysMeta || {}, sseParams);
   const sysMetaJson = sysMeta ? JSON.stringify(sysMeta) : undefined;
 
   await store.createMultipartUpload(uploadId, s3.bucket, s3.key, contentType, metaJson, sysMetaJson);
 
-  return xmlResponse(initiateMultipartXml(s3.bucket, s3.key, uploadId));
+  const resp = xmlResponse(initiateMultipartXml(s3.bucket, s3.key, uploadId));
+  if (sseParams) {
+    resp.headers.set('x-amz-server-side-encryption-customer-algorithm', 'AES256');
+    resp.headers.set('x-amz-server-side-encryption-customer-key-MD5', sseParams.keyMd5);
+  }
+  return resp;
 }
 
 export async function handleUploadPart(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -47,6 +64,26 @@ export async function handleUploadPart(s3: S3Request, env: Env, ctx: ExecutionCo
 
   const upload = await store.getMultipartUpload(uploadId);
   if (!upload || upload.bucket !== s3.bucket || upload.key !== s3.key) return errorResponse(404, 'NoSuchUpload', 'The specified multipart upload does not exist.');
+
+  // SSE-C: validate headers match the upload's SSE metadata (if any)
+  let uploadSseMd5: string | null = null;
+  if (upload.system_metadata) {
+    try {
+      const sm = JSON.parse(upload.system_metadata);
+      if (sm._sse === 'AES256') uploadSseMd5 = sm._sse_key_md5;
+    } catch { /* ignore */ }
+  }
+  if (uploadSseMd5) {
+    try {
+      const sseParams = parseSseCHeaders(s3.headers);
+      if (!sseParams) return errorResponse(400, 'InvalidRequest', 'This multipart upload was initiated with SSE-C. You must provide the encryption key.');
+      await validateKeyMd5(sseParams);
+      if (sseParams.keyMd5 !== uploadSseMd5) return errorResponse(400, 'InvalidArgument', 'The SSE-C key does not match the key used to initiate the multipart upload.');
+    } catch (e) {
+      if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+      throw e;
+    }
+  }
 
   const bucket = await store.getBucket(upload.bucket);
   if (!bucket) return errorResponse(404, 'NoSuchBucket', 'Bucket not found.');
@@ -182,11 +219,30 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
   let uploadResult: UploadResult;
   let etag: string;
 
+  // Check if upload has SSE-C metadata (for encrypting the final consolidated file)
+  let uploadSseKeyBase64: string | null = null;
+  let uploadSseKeyMd5: string | null = null;
+  if (upload.system_metadata) {
+    try {
+      const sm = JSON.parse(upload.system_metadata);
+      if (sm._sse === 'AES256') {
+        uploadSseKeyMd5 = sm._sse_key_md5;
+        // SSE-C key is needed for final encryption. S3 clients don't send it on CompleteMultipartUpload,
+        // but if provided (e.g. by tg-s3-aware clients), we use it. Parts are stored unencrypted.
+        const sseParams = parseSseCHeaders(s3.headers);
+        if (sseParams) {
+          if (sseParams.keyMd5 !== uploadSseKeyMd5) {
+            return errorResponse(400, 'InvalidArgument', 'The SSE-C key does not match the key used to initiate the multipart upload.');
+          }
+          uploadSseKeyBase64 = sseParams.keyBase64;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   if (totalSize <= BOT_API_GETFILE_LIMIT) {
-    // <=20MB: consolidate in Worker memory (CF Workers have 128MB limit;
-    // 20MB per request is safe for moderate concurrency)
+    // <=20MB: consolidate in Worker memory
     const combined = new Uint8Array(totalSize);
-    // Parallel download: all parts fetched concurrently since buffer is pre-allocated
     const downloads = await Promise.all(
       sortedParts.map(part => downloadFromTelegram(part.tg_file_id, env).then(r => r.arrayBuffer())),
     );
@@ -196,12 +252,17 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
       pos += buf.byteLength;
     }
 
-    // S3 multipart ETag format: "md5_of_concatenated_part_md5s-part_count"
     etag = await computeMultipartEtag(sortedParts.map(p => p.etag));
+
+    // SSE-C: encrypt consolidated file before uploading
+    let uploadData: ArrayBuffer = combined.buffer as ArrayBuffer;
+    if (uploadSseKeyBase64) {
+      uploadData = await encrypt(uploadData, uploadSseKeyBase64);
+    }
 
     try {
       uploadResult = await uploadToTelegram(
-        combined.buffer as ArrayBuffer,
+        uploadData,
         bucket.tg_chat_id,
         upload.key,
         upload.content_type || 'application/octet-stream',

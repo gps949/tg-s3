@@ -126,6 +126,31 @@ CREATE TABLE IF NOT EXISTS credentials (
 -- Migration for existing deployments (public bucket access):
 -- ALTER TABLE buckets ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0;
 
+-- S3 Object Tagging: up to 10 key-value pairs per object
+CREATE TABLE IF NOT EXISTS object_tags (
+    bucket          TEXT    NOT NULL,
+    key             TEXT    NOT NULL,
+    tag_key         TEXT    NOT NULL,
+    tag_value       TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (bucket, key, tag_key),
+    FOREIGN KEY (bucket, key) REFERENCES objects (bucket, key) ON DELETE CASCADE
+);
+
+-- Lifecycle rules: per-bucket expiration policies
+CREATE TABLE IF NOT EXISTS lifecycle_rules (
+    id              TEXT    PRIMARY KEY,
+    bucket          TEXT    NOT NULL,
+    prefix          TEXT    NOT NULL DEFAULT '',
+    expiration_days INTEGER NOT NULL,
+    tag_key         TEXT,
+    tag_value       TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (bucket) REFERENCES buckets (name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lifecycle_bucket ON lifecycle_rules (bucket);
+
 -- [Phase 2 预留] 分块上传/下载实现时需要的 objects 表扩展:
 -- ALTER TABLE objects ADD COLUMN is_chunked INTEGER NOT NULL DEFAULT 0;
 -- ALTER TABLE objects ADD COLUMN chunk_count INTEGER;

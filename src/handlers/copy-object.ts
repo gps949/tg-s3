@@ -1,11 +1,18 @@
 import type { Env, S3Request } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { TelegramClient } from '../telegram/client';
+import { downloadFromTelegram } from '../telegram/download';
+import { uploadToTelegram } from '../telegram/upload';
 import { computeEtag } from '../utils/crypto';
 import { extractUserMetadata, extractSystemMetadata, etagMatches } from '../utils/headers';
 import { copyObjectXml, xmlResponse, errorResponse } from '../xml/builder';
 import { purgeCdnCache, purgeR2Cache } from './get-object';
 import { deleteDerivatives, deleteChunks } from './delete-object';
+import {
+  parseSseCHeaders, validateKeyMd5, encrypt, decrypt,
+  isEncrypted, getStoredKeyMd5, addSseMetadata, SseCError,
+  SSE_HEADERS, SSE_COPY_HEADERS,
+} from '../utils/sse';
 
 export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const store = new MetadataStore(env);
@@ -68,38 +75,71 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
     }
   }
 
+  // SSE-C: parse source and destination encryption headers
+  let srcSse: ReturnType<typeof parseSseCHeaders> = null;
+  let destSse: ReturnType<typeof parseSseCHeaders> = null;
+  try {
+    srcSse = parseSseCHeaders(s3.headers, SSE_COPY_HEADERS);
+    if (srcSse) await validateKeyMd5(srcSse);
+    destSse = parseSseCHeaders(s3.headers, SSE_HEADERS);
+    if (destSse) await validateKeyMd5(destSse);
+  } catch (e) {
+    if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+    throw e;
+  }
+
+  // If source is encrypted, require source SSE-C headers
+  const srcEncrypted = isEncrypted(srcObj.system_metadata);
+  if (srcEncrypted && !srcSse) {
+    return errorResponse(400, 'InvalidRequest', 'The source object was stored using SSE-C. You must provide the source encryption key headers.');
+  }
+  if (srcEncrypted && srcSse) {
+    const storedMd5 = getStoredKeyMd5(srcObj.system_metadata);
+    if (storedMd5 && srcSse.keyMd5 !== storedMd5) {
+      return errorResponse(403, 'AccessDenied', 'The provided source encryption key does not match.');
+    }
+  }
+
   // Check destination bucket exists
   const destBucket = await store.getBucket(s3.bucket);
   if (!destBucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
 
-  // If same bucket, just copy metadata (reuse same TG file_id)
-  // If different bucket, forward message to destination channel
+  // Determine if re-encryption is needed (source encrypted or dest wants encryption)
+  const needsReEncrypt = srcEncrypted || !!destSse;
+
   let tgChatId = srcObj.tg_chat_id;
   let tgMessageId = srcObj.tg_message_id;
   let tgFileId = srcObj.tg_file_id;
 
-  // 0-byte objects have no TG message to forward, just copy metadata
-  if (srcObj.size > 0 && srcBucketRow && destBucket.tg_chat_id !== srcBucketRow.tg_chat_id) {
+  if (needsReEncrypt && srcObj.size > 0) {
+    // Must download, decrypt source, re-encrypt for dest, re-upload
+    const tgRes = await downloadFromTelegram(srcObj.tg_file_id, env);
+    let data = await tgRes.arrayBuffer();
+    if (srcEncrypted && srcSse) {
+      data = await decrypt(data, srcSse.keyBase64);
+    }
+    if (destSse) {
+      data = await encrypt(data, destSse.keyBase64);
+    }
+    const result = await uploadToTelegram(data, destBucket.tg_chat_id, s3.key, srcObj.content_type, env, destBucket.tg_topic_id);
+    tgChatId = result.tgChatId;
+    tgMessageId = result.tgMessageId;
+    tgFileId = result.tgFileId;
+  } else if (srcObj.size > 0 && srcBucketRow && destBucket.tg_chat_id !== srcBucketRow.tg_chat_id) {
+    // No encryption change, different bucket: forward/re-send TG message
     const tg = new TelegramClient(env);
     if (srcObj.tg_message_id === 0) {
-      // Bot-uploaded file has no channel message; re-send by file_id to destination
       const sendRes = await tg.sendDocumentByFileId(destBucket.tg_chat_id, srcObj.tg_file_id, destBucket.tg_topic_id);
       tgChatId = destBucket.tg_chat_id;
       tgMessageId = sendRes.result.message_id;
-      if (sendRes.result.document) {
-        tgFileId = sendRes.result.document.file_id;
-      }
+      if (sendRes.result.document) tgFileId = sendRes.result.document.file_id;
     } else {
-      // Forward existing channel message to destination
       const fwdRes = await tg.forwardMessage(srcObj.tg_chat_id, destBucket.tg_chat_id, srcObj.tg_message_id, destBucket.tg_topic_id);
       tgChatId = destBucket.tg_chat_id;
       tgMessageId = fwdRes.result.message_id;
-      if (fwdRes.result.document) {
-        tgFileId = fwdRes.result.document.file_id;
-      }
+      if (fwdRes.result.document) tgFileId = fwdRes.result.document.file_id;
     }
   } else if (srcObj.size === 0) {
-    // 0-byte: point to destination bucket's chat
     tgChatId = destBucket.tg_chat_id;
   }
 
@@ -121,6 +161,16 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
     if (srcObj.system_metadata) {
       try { systemMetadata = JSON.parse(srcObj.system_metadata); } catch { /* ignore corrupt */ }
     }
+  }
+
+  // Add destination SSE-C metadata (or strip source SSE metadata if no dest encryption)
+  if (destSse) {
+    systemMetadata = addSseMetadata(systemMetadata || {}, destSse);
+  } else if (srcEncrypted && systemMetadata) {
+    // Source was encrypted but dest is not: remove SSE metadata
+    delete systemMetadata._sse;
+    delete systemMetadata._sse_key_md5;
+    if (Object.keys(systemMetadata).length === 0) systemMetadata = undefined;
   }
 
   // Check for existing object at destination (for old TG message cleanup)
@@ -156,5 +206,10 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
   ctx.waitUntil(purgeCdnCache(s3.url.origin, s3.bucket, s3.key));
   ctx.waitUntil(purgeR2Cache(env, s3.bucket, s3.key));
 
-  return xmlResponse(copyObjectXml(srcObj.etag, now));
+  const copyResp = xmlResponse(copyObjectXml(srcObj.etag, now));
+  if (destSse) {
+    copyResp.headers.set('x-amz-server-side-encryption-customer-algorithm', 'AES256');
+    copyResp.headers.set('x-amz-server-side-encryption-customer-key-MD5', destSse.keyMd5);
+  }
+  return copyResp;
 }

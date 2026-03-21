@@ -3,7 +3,7 @@
 tg-s3 implements an S3-compatible API on top of Telegram as the storage backend.
 This document records the compatibility status and deliberate design decisions.
 
-## Supported Operations (21)
+## Supported Operations (27)
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
@@ -28,6 +28,24 @@ This document records the compatibility status and deliberate design decisions.
 | AbortMultipartUpload | Full | Cleans up TG messages |
 | ListParts | Full | Pagination with part-number-marker |
 | ListMultipartUploads | Full | Prefix, delimiter, pagination |
+| GetObjectTagging | Full | Up to 10 key-value tags per object |
+| PutObjectTagging | Full | XML body, max 10 tags, key<=128, value<=256 |
+| DeleteObjectTagging | Full | |
+| GetBucketLifecycleConfiguration | Full | Prefix + tag filter support |
+| PutBucketLifecycleConfiguration | Full | Expiration rules with prefix and tag filters |
+| DeleteBucketLifecycleConfiguration | Full | |
+
+## Server-Side Encryption
+
+- **SSE-C** (Customer-Provided Keys): Full support. AES-256-GCM encryption in CF Worker. Headers: `x-amz-server-side-encryption-customer-algorithm`, `x-amz-server-side-encryption-customer-key`, `x-amz-server-side-encryption-customer-key-MD5`. Supported on PutObject, GetObject, HeadObject, CopyObject, and multipart uploads.
+- **SSE-S3** (Server-Managed Keys): Not implemented. Use SSE-C for encryption.
+- **SSE-KMS**: Not implemented (no KMS integration).
+
+**SSE-C notes:**
+- Encrypted objects skip CDN and R2 caching (each GET requires the customer key)
+- ETag is always MD5 of plaintext (standard S3 behavior for SSE-C)
+- CopyObject supports re-encryption: `x-amz-copy-source-server-side-encryption-customer-*` headers for source decryption
+- Multipart: parts are stored unencrypted temporarily; the final consolidated file is encrypted
 
 ## Authentication
 
@@ -67,17 +85,16 @@ This document records the compatibility status and deliberate design decisions.
 
 **Alternative**: A trash bin feature (soft delete with configurable retention period) is the recommended path for file protection. This covers the primary user need (undo accidental deletion) without the architectural complexity of full S3 versioning.
 
-### Sub-resource Operations (acl, tagging, policy, etc.)
+### Sub-resource Operations (acl, policy, etc.)
 
-Unsupported S3 sub-resource operations (`?acl`, `?tagging`, `?policy`, `?cors`, `?lifecycle`, `?encryption`, etc.) are explicitly detected and return `501 NotImplemented`. This prevents them from being misrouted to data operations (e.g. `PUT /key?acl` being treated as PutObject).
+Unsupported S3 sub-resource operations (`?acl`, `?policy`, `?cors`, `?encryption`, etc.) are explicitly detected and return `501 NotImplemented`. This prevents them from being misrouted to data operations (e.g. `PUT /key?acl` being treated as PutObject).
 
 ## Platform Constraints
 
 These are inherent to the Telegram storage backend:
 
 - **Single object size limit**: 2GB (Local Bot API) or 50MB (standard Bot API upload) / 20MB (standard Bot API download)
-- **No server-side encryption (SSE)**: Telegram handles storage; we don't control encryption at rest
+- **SSE-C only**: SSE-S3 and SSE-KMS are not available (no server-managed key store)
 - **No storage classes**: All objects are effectively STANDARD
-- **No lifecycle policies**: Use cron-based cleanup instead
 - **No object locking / retention**: Not applicable to Telegram storage
 - **No bucket policies / ACL**: Single-owner system with bearer token or SigV4 auth
