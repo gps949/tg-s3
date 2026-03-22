@@ -12,7 +12,11 @@ import { initiateMultipartXml, completeMultipartXml, listPartsXml, listMultipart
 import { BOT_API_GETFILE_LIMIT, VPS_SINGLE_FILE_MAX, S3_MIN_PART_SIZE, S3_MAX_KEYS_DEFAULT, S3_MAX_PART_NUMBER } from '../constants';
 import { VpsClient } from '../media/vps-client';
 import { parseCompleteMultipart } from '../xml/parser';
-import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError, encryptS3, addSseS3Metadata } from '../utils/sse';
+import {
+  parseSseCHeaders, validateKeyMd5, encrypt, decrypt, addSseMetadata, SseCError,
+  encryptS3, addSseS3Metadata, decryptS3,
+  isEncrypted, isEncryptedS3, getStoredKeyMd5, SSE_COPY_HEADERS,
+} from '../utils/sse';
 
 function clampInt(val: string | null, defaultVal: number, min: number, max: number): number {
   const n = parseInt(val || String(defaultVal), 10);
@@ -526,6 +530,30 @@ export async function handleUploadPartCopy(s3: S3Request, env: Env, ctx: Executi
     }
   }
 
+  // SSE-C: parse copy-source encryption headers (for encrypted source objects)
+  const srcEncrypted = isEncrypted(srcObj.system_metadata);
+  const srcEncryptedS3 = isEncryptedS3(srcObj.system_metadata);
+  let srcSse: ReturnType<typeof parseSseCHeaders> = null;
+
+  if (srcEncrypted) {
+    try {
+      srcSse = parseSseCHeaders(s3.headers, SSE_COPY_HEADERS);
+    } catch (e) {
+      if (e instanceof SseCError) return errorResponse(400, 'InvalidArgument', e.message);
+      throw e;
+    }
+    if (!srcSse) {
+      return errorResponse(400, 'InvalidRequest', 'The source object was stored using SSE-C. You must provide the source encryption key headers.');
+    }
+    await validateKeyMd5(srcSse);
+    const storedMd5 = getStoredKeyMd5(srcObj.system_metadata);
+    if (storedMd5 && srcSse.keyMd5 !== storedMd5) {
+      return errorResponse(403, 'AccessDenied', 'The provided source encryption key does not match.');
+    }
+  }
+
+  const needsDecrypt = srcEncrypted || (srcEncryptedS3 && !!env.SSE_MASTER_KEY);
+
   // Parse x-amz-copy-source-range (optional, format: bytes=start-end)
   const rangeHeader = s3.headers.get('x-amz-copy-source-range');
   let start = 0;
@@ -541,9 +569,33 @@ export async function handleUploadPartCopy(s3: S3Request, env: Env, ctx: Executi
   }
 
   // Download source data (or range)
+  // Encrypted sources: AES-GCM requires full download + decrypt, then slice range
   let data: ArrayBuffer;
   if (srcObj.size === 0) {
     data = new ArrayBuffer(0);
+  } else if (needsDecrypt) {
+    // Must download full file, decrypt, then apply range
+    let fullData: ArrayBuffer;
+    if (srcObj.size <= BOT_API_GETFILE_LIMIT) {
+      const tgRes = await downloadFromTelegram(srcObj.tg_file_id, env);
+      fullData = await tgRes.arrayBuffer();
+    } else if (env.VPS_URL) {
+      try {
+        const vps = new VpsClient(env);
+        const vpsRes = await vps.proxyGet(srcObj.tg_file_id);
+        fullData = await vpsRes.arrayBuffer();
+      } catch {
+        return errorResponse(503, 'ServiceUnavailable', 'Failed to download source object from storage backend.');
+      }
+    } else {
+      return errorResponse(503, 'ServiceUnavailable', 'Source file exceeds 20MB and requires VPS proxy which is not configured.');
+    }
+    if (srcEncrypted && srcSse) {
+      fullData = await decrypt(fullData, srcSse.keyBase64);
+    } else if (srcEncryptedS3 && env.SSE_MASTER_KEY) {
+      fullData = await decryptS3(fullData, env.SSE_MASTER_KEY);
+    }
+    data = fullData.slice(start, end + 1);
   } else if (srcObj.size <= BOT_API_GETFILE_LIMIT) {
     const tgRes = await downloadFromTelegram(srcObj.tg_file_id, env);
     const full = await tgRes.arrayBuffer();

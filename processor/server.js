@@ -17,6 +17,10 @@ const AUTH_SECRET = process.env.AUTH_SECRET;
 const TG_API = process.env.TG_LOCAL_API || 'https://api.telegram.org';
 const TEMP_DIR = process.env.TEMP_DIR || '/tmp/tg-s3-processor';
 
+// Timeout constants for TG API calls (server-side protection against hangs)
+const TIMEOUT_API = 30_000;            // 30s for getFile and similar API method calls
+const TIMEOUT_TRANSFER = 10 * 60_000;  // 10 min for file download/upload operations (up to 2GB)
+
 // Validate required env vars at startup to fail fast
 const REQUIRED_ENV = { TG_BOT_TOKEN: BOT_TOKEN, AUTH_SECRET };
 for (const [name, value] of Object.entries(REQUIRED_ENV)) {
@@ -116,6 +120,7 @@ app.post('/api/proxy/put', express.raw({ type: '*/*', limit: '2gb' }), async (re
     const tgRes = await fetch(`${TG_API}/bot${BOT_TOKEN}/sendDocument`, {
       method: 'POST',
       body: form,
+      signal: AbortSignal.timeout(TIMEOUT_TRANSFER),
     });
 
     if (!tgRes.ok) {
@@ -181,7 +186,7 @@ app.post('/api/proxy/consolidate', async (req, res) => {
     for (const fileId of file_ids) {
       const filePath = await getFilePath(fileId);
       const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
-      const tgRes = await fetch(url);
+      const tgRes = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_TRANSFER) });
       if (!tgRes.ok) throw new Error(`Download part failed: ${tgRes.status}`);
 
       const reader = tgRes.body.getReader();
@@ -202,15 +207,24 @@ app.post('/api/proxy/consolidate', async (req, res) => {
     const etag = hash.digest('hex');
 
     // Upload combined file via Local Bot API
-    const fileBuffer = await readFile(tempPath);
+    // Use openAsBlob (Node 20+) to avoid loading entire file into memory; fallback to readFile
+    let fileBlob;
+    try {
+      const { openAsBlob } = await import('node:fs');
+      fileBlob = await openAsBlob(tempPath, { type: content_type });
+    } catch {
+      const fileBuffer = await readFile(tempPath);
+      fileBlob = new Blob([fileBuffer], { type: content_type });
+    }
     const form = new FormData();
     form.append('chat_id', chat_id);
-    form.append('document', new Blob([fileBuffer], { type: content_type }), filename);
+    form.append('document', fileBlob, filename);
     if (message_thread_id) form.append('message_thread_id', message_thread_id.toString());
 
     const tgRes = await fetch(`${TG_API}/bot${BOT_TOKEN}/sendDocument`, {
       method: 'POST',
       body: form,
+      signal: AbortSignal.timeout(TIMEOUT_TRANSFER),
     });
 
     if (!tgRes.ok) {
@@ -241,7 +255,7 @@ app.get('/api/image/resize', async (req, res) => {
     const { tg_file_id, width, format } = req.query;
     const filePath = await getFilePath(tg_file_id);
     const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
-    const tgRes = await fetch(url);
+    const tgRes = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_TRANSFER) });
     if (!tgRes.ok) return res.status(502).json({ error: 'TG download failed' });
 
     const inputBuffer = Buffer.from(await tgRes.arrayBuffer());
@@ -279,7 +293,7 @@ async function processJob(jobId) {
   // Download source file from TG
   const filePath = await getFilePath(job.tg_file_id);
   const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
-  const tgRes = await fetch(url);
+  const tgRes = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_TRANSFER) });
   if (!tgRes.ok) throw new Error(`TG download failed: ${tgRes.status}`);
   const inputBuffer = Buffer.from(await tgRes.arrayBuffer());
 
@@ -384,6 +398,7 @@ async function uploadDerivative(job, derivativeName, buffer, contentType) {
   const tgRes = await fetch(`${TG_API}/bot${BOT_TOKEN}/sendDocument`, {
     method: 'POST',
     body: form,
+    signal: AbortSignal.timeout(TIMEOUT_TRANSFER),
   });
 
   if (!tgRes.ok) {
@@ -408,6 +423,7 @@ async function getFilePath(fileId) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ file_id: fileId }),
+    signal: AbortSignal.timeout(TIMEOUT_API),
   });
   if (!res.ok) throw new Error(`getFile failed: ${res.status}`);
   const data = await res.json();
