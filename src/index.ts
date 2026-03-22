@@ -954,6 +954,14 @@ async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: Execu
     return Response.json(masked);
   }
 
+  // GET /api/miniapp/credential/:id/secret - get unmasked secret for sync setup
+  const credSecretMatch = path.match(/^\/api\/miniapp\/credential\/([^/]+)\/secret$/);
+  if (credSecretMatch && method === 'GET') {
+    const cred = await store.getCredentialByAccessKeyUnsafe(credSecretMatch[1]);
+    if (!cred) return Response.json({ error: 'Credential not found' }, { status: 404 });
+    return Response.json({ access_key_id: cred.access_key_id, secret_access_key: cred.secret_access_key });
+  }
+
   // POST /api/miniapp/credential - create new credential
   if (path === '/api/miniapp/credential' && method === 'POST') {
     // Limit total credentials to prevent abuse

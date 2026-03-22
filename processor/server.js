@@ -107,6 +107,7 @@ app.post('/api/proxy/get', async (req, res) => {
 app.post('/api/proxy/put', express.raw({ type: '*/*', limit: '2gb' }), async (req, res) => {
   try {
     const chatId = req.headers['x-chat-id'] || req.query.chat_id;
+    if (!chatId) return res.status(400).json({ error: 'Missing X-Chat-Id' });
     const filename = req.headers['x-filename'] || req.query.filename || 'file';
     const contentType = req.headers['x-content-type'] || req.query.content_type || 'application/octet-stream';
     const messageThreadId = req.headers['x-message-thread-id'] || req.query.message_thread_id;
@@ -270,23 +271,23 @@ app.post('/api/proxy/put-full', async (req, res) => {
 async function streamEncryptFile(inputPath, outputPath, keyBase64) {
   const iv = randomBytes(12);
   const keyBuf = Buffer.from(keyBase64, 'base64');
+  if (keyBuf.length !== 32) throw new Error(`AES-256 key must be 32 bytes, got ${keyBuf.length}`);
   const cipher = createCipheriv('aes-256-gcm', keyBuf, iv);
 
   const rs = createReadStream(inputPath);
   const ws = createWriteStream(outputPath);
 
-  ws.write(iv); // IV header
-
   await new Promise((resolve, reject) => {
+    ws.on('error', reject);
+    rs.on('error', reject);
+    cipher.on('error', reject);
+    ws.write(iv); // IV header
     rs.pipe(cipher);
     cipher.on('data', chunk => ws.write(chunk));
     cipher.on('end', () => {
       ws.write(cipher.getAuthTag()); // 16-byte auth tag
       ws.end(resolve);
     });
-    cipher.on('error', reject);
-    rs.on('error', reject);
-    ws.on('error', reject);
   });
 }
 
@@ -331,6 +332,7 @@ app.post('/api/proxy/get-decrypt', async (req, res) => {
 
     // 3. Stream-decrypt ciphertext to another temp file
     const keyBuf = Buffer.from(key_base64, 'base64');
+    if (keyBuf.length !== 32) return res.status(400).json({ error: `AES-256 key must be 32 bytes, got ${keyBuf.length}` });
     const decipher = createDecipheriv('aes-256-gcm', keyBuf, ivBuf);
     decipher.setAuthTag(authTagBuf);
 
@@ -388,6 +390,9 @@ app.post('/api/proxy/consolidate', async (req, res) => {
     const writeStream = createWriteStream(tempPath);
     const hash = createHash('md5');
 
+    // Attach error handler before any writes to catch disk errors
+    const writeError = new Promise((_, reject) => writeStream.on('error', reject));
+
     for (const fileId of file_ids) {
       const filePath = await getFilePath(fileId);
       const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
@@ -404,10 +409,10 @@ app.post('/api/proxy/consolidate', async (req, res) => {
       }
     }
 
-    await new Promise((resolve, reject) => {
-      writeStream.end(resolve);
-      writeStream.on('error', reject);
-    });
+    await Promise.race([
+      new Promise(resolve => writeStream.end(resolve)),
+      writeError,
+    ]);
 
     const etag = hash.digest('hex');
 
@@ -550,35 +555,36 @@ async function processJob(jobId) {
       const outputPath = join(TEMP_DIR, `${jobId}-output.mp4`);
       const posterPath = join(TEMP_DIR, `${jobId}-poster.jpg`);
 
-      await writeFile(inputPath, inputBuffer);
+      try {
+        await writeFile(inputPath, inputBuffer);
 
-      // Transcode to H.264 MP4
-      await execFileAsync('ffmpeg', [
-        '-i', inputPath,
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-movflags', '+faststart',
-        '-y', outputPath,
-      ]);
+        // Transcode to H.264 MP4
+        await execFileAsync('ffmpeg', [
+          '-i', inputPath,
+          '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-movflags', '+faststart',
+          '-y', outputPath,
+        ]);
 
-      // Extract poster frame
-      await execFileAsync('ffmpeg', [
-        '-i', inputPath,
-        '-ss', '00:00:01', '-vframes', '1',
-        '-y', posterPath,
-      ]);
+        // Extract poster frame
+        await execFileAsync('ffmpeg', [
+          '-i', inputPath,
+          '-ss', '00:00:01', '-vframes', '1',
+          '-y', posterPath,
+        ]);
 
-      const mp4Buffer = await readFile(outputPath);
-      results.push(await uploadDerivative(job, 'video.mp4', mp4Buffer, 'video/mp4'));
+        const mp4Buffer = await readFile(outputPath);
+        results.push(await uploadDerivative(job, 'video.mp4', mp4Buffer, 'video/mp4'));
 
-      if (existsSync(posterPath)) {
-        const posterBuffer = await readFile(posterPath);
-        results.push(await uploadDerivative(job, 'poster.jpg', posterBuffer, 'image/jpeg'));
-      }
-
-      // Cleanup temp files
-      for (const p of [inputPath, outputPath, posterPath]) {
-        try { unlinkSync(p); } catch {}
+        if (existsSync(posterPath)) {
+          const posterBuffer = await readFile(posterPath);
+          results.push(await uploadDerivative(job, 'poster.jpg', posterBuffer, 'image/jpeg'));
+        }
+      } finally {
+        for (const p of [inputPath, outputPath, posterPath]) {
+          try { unlinkSync(p); } catch {}
+        }
       }
       break;
     }
@@ -606,7 +612,8 @@ async function uploadDerivative(job, derivativeName, buffer, contentType) {
   const key = `${job.key}._derivatives/${derivativeName}`;
 
   const form = new FormData();
-  form.append('chat_id', process.env.DEFAULT_CHAT_ID || '');
+  if (!process.env.DEFAULT_CHAT_ID) throw new Error('DEFAULT_CHAT_ID is not configured');
+  form.append('chat_id', process.env.DEFAULT_CHAT_ID);
   form.append('document', new Blob([buffer], { type: contentType }), derivativeName);
   form.append('caption', key);
 

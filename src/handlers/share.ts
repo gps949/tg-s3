@@ -34,6 +34,11 @@ export async function handleShareApi(request: Request, url: URL, env: Env, auth?
   const path = url.pathname;
   const method = request.method;
 
+  // Write operations require at least readwrite permission
+  if (auth && auth.permission === 'readonly' && (method === 'POST' || method === 'DELETE' || method === 'PATCH')) {
+    return Response.json({ error: 'Readonly credentials cannot modify shares' }, { status: 403 });
+  }
+
   // POST /api/shares
   if (method === 'POST' && path === '/api/shares') {
     let body: { bucket: string; key: string; expiresIn?: number; password?: string; maxDownloads?: number; note?: string };

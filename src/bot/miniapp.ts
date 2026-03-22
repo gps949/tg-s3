@@ -458,9 +458,10 @@ async function showSyncSetup(bucketName) {
       toast(t('sync_no_key'));
       return;
     }
+    var fullCred = await apiFetch('/api/miniapp/credential/' + encodeURIComponent(activeCred.access_key_id) + '/secret');
     var endpoint = API;
-    var akid = activeCred.access_key_id;
-    var secret = activeCred.secret_access_key;
+    var akid = fullCred.access_key_id;
+    var secret = fullCred.secret_access_key;
     var simpleToken = akid + ':' + secret;
 
     showModal(
