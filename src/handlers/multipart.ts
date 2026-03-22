@@ -174,6 +174,10 @@ export async function handleUploadPart(s3: S3Request, env: Env, ctx: ExecutionCo
 
   const partHeaders: Record<string, string> = { 'ETag': etag };
   if (contentMd5) partHeaders['Content-MD5'] = contentMd5;
+  if (uploadSseMd5) {
+    partHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
+    partHeaders['x-amz-server-side-encryption-customer-key-MD5'] = uploadSseMd5;
+  }
   return new Response(null, {
     status: 200,
     headers: partHeaders,
@@ -360,10 +364,16 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
   const encodedKey = upload.key.split('/').map(encodeURIComponent).join('/');
   const location = `${s3.url.origin}/${encodeURIComponent(upload.bucket)}/${encodedKey}`;
   const xml = completeMultipartXml(upload.bucket, upload.key, etag, location);
-  return new Response(xml, {
-    status: 200,
-    headers: { 'Content-Type': 'application/xml', 'Location': location, 'ETag': etag },
-  });
+  const completeHeaders: Record<string, string> = {
+    'Content-Type': 'application/xml', 'Location': location, 'ETag': etag,
+  };
+  if (uploadSseKeyBase64 && uploadSseKeyMd5) {
+    completeHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
+    completeHeaders['x-amz-server-side-encryption-customer-key-MD5'] = uploadSseKeyMd5;
+  } else if (uploadUseSseS3) {
+    completeHeaders['x-amz-server-side-encryption'] = 'AES256';
+  }
+  return new Response(xml, { status: 200, headers: completeHeaders });
 }
 
 export async function handleAbortMultipartUpload(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {

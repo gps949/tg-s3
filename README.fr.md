@@ -16,6 +16,7 @@ TG-S3 transforme Telegram en backend de stockage objet compatible S3. Les fichie
 - **Bot Telegram** -- Gérez fichiers, buckets et partages directement depuis Telegram
 - **Mini App** -- Interface web complète dans Telegram avec navigateur de fichiers, uploads et gestion des partages
 - **Partage de fichiers** -- Liens de partage avec protection par mot de passe, expiration, limite de téléchargements et aperçu en ligne
+- **Chiffrement côté serveur** -- SSE-C (clés fournies par le client) et SSE-S3 (clés gérées par le serveur) avec AES-256-GCM
 - **Support gros fichiers** -- Fichiers jusqu'à 2 Go via proxy VPS optionnel avec Local Bot API
 - **Traitement média** -- Conversion d'images (HEIC/WebP), transcodage vidéo, gestion Live Photo via VPS
 - **Authentification multi-identifiants** -- Gestion des identifiants D1 avec permissions par bucket et par opération
