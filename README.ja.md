@@ -127,9 +127,9 @@ rclone ls tgs3:default
 | `/start` | ウェルカムメッセージ |
 | `/help` | コマンドリファレンス |
 | `/buckets` | 全バケット一覧 |
-| `/ls [bucket] [prefix]` | オブジェクト一覧 |
+| `/ls <bucket> [prefix]` | オブジェクト一覧 |
 | `/info <bucket> <key>` | オブジェクト詳細 |
-| `/search <query>` | オブジェクト検索 |
+| `/search <bucket> <query>` | オブジェクト検索 |
 | `/share <bucket> <key>` | 共有リンク作成 |
 | `/shares` | アクティブな共有一覧 |
 | `/revoke <token>` | 共有を取り消し |

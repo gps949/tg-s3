@@ -111,9 +111,9 @@ rclone ls tgs3:default
 | `/start` | Welcome message |
 | `/help` | Command reference |
 | `/buckets` | List all buckets |
-| `/ls [bucket] [prefix]` | List objects |
+| `/ls <bucket> [prefix]` | List objects |
 | `/info <bucket> <key>` | Object details |
-| `/search <query>` | Search objects |
+| `/search <bucket> <query>` | Search objects |
 | `/share <bucket> <key>` | Create share link |
 | `/shares` | List active shares |
 | `/revoke <token>` | Revoke a share |

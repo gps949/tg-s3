@@ -111,9 +111,9 @@ rclone ls tgs3:default
 | `/start` | 欢迎消息 |
 | `/help` | 命令帮助 |
 | `/buckets` | 列出所有存储桶 |
-| `/ls [bucket] [prefix]` | 列出对象 |
+| `/ls <bucket> [prefix]` | 列出对象 |
 | `/info <bucket> <key>` | 对象详情 |
-| `/search <query>` | 搜索对象 |
+| `/search <bucket> <query>` | 搜索对象 |
 | `/share <bucket> <key>` | 创建分享链接 |
 | `/shares` | 列出活跃的分享 |
 | `/revoke <token>` | 撤销分享 |

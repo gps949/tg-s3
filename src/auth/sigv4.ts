@@ -24,18 +24,18 @@ export async function verifySignature(request: Request, url: URL, resolve: Crede
 
     const { credential, signedHeaders, signature } = parts;
     const credParts = credential.split('/');
-    if (credParts.length < 4) {
+    if (credParts.length !== 5) {
       return { status: 400, code: 'AuthorizationHeaderMalformed', message: 'The authorization header is malformed.' };
     }
-    const [accessKeyId, dateStr, region, service] = credParts;
+    const [accessKeyId, dateStr, region, service, terminator] = credParts;
+
+    if (service !== 's3' || terminator !== 'aws4_request') {
+      return { status: 400, code: 'AuthorizationHeaderMalformed', message: 'The authorization header is malformed.' };
+    }
 
     const resolved = await resolve(accessKeyId);
     if (!resolved) {
       return { status: 403, code: 'InvalidAccessKeyId', message: 'The AWS Access Key Id you provided does not exist in our records.' };
-    }
-
-    if (service !== 's3') {
-      return { status: 400, code: 'AuthorizationHeaderMalformed', message: 'The authorization header is malformed.' };
     }
 
     let amzDate = request.headers.get('x-amz-date') || request.headers.get('X-Amz-Date') || '';
@@ -97,18 +97,18 @@ async function verifyQueryStringAuth(request: Request, url: URL, resolve: Creden
 
   const credential = url.searchParams.get('X-Amz-Credential') || '';
   const credParts = credential.split('/');
-  if (credParts.length < 4) {
+  if (credParts.length !== 5) {
     return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Invalid X-Amz-Credential parameter.' };
   }
-  const [accessKeyId, dateStr, region, service] = credParts;
+  const [accessKeyId, dateStr, region, service, terminator] = credParts;
+
+  if (service !== 's3' || terminator !== 'aws4_request') {
+    return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Invalid X-Amz-Credential parameter.' };
+  }
 
   const resolved = await resolve(accessKeyId);
   if (!resolved) {
     return { status: 403, code: 'InvalidAccessKeyId', message: 'The AWS Access Key Id you provided does not exist in our records.' };
-  }
-
-  if (service !== 's3') {
-    return { status: 400, code: 'AuthorizationQueryParametersError', message: 'Invalid X-Amz-Credential parameter.' };
   }
 
   const amzDate = url.searchParams.get('X-Amz-Date') || '';

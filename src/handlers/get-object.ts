@@ -97,6 +97,9 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
 
   // SSE-S3: object encrypted with server-managed key (auto-decrypt)
   const objEncryptedS3 = isEncryptedS3(obj.system_metadata);
+  if (objEncryptedS3 && !env.SSE_MASTER_KEY) {
+    return errorResponse(500, 'InternalError', 'Object is SSE-S3 encrypted but SSE_MASTER_KEY is not configured.');
+  }
 
   // Conditional: If-Match (412 if ETag doesn't match)
   const ifMatch = s3.headers.get('if-match');

@@ -37,16 +37,14 @@ Buckets (3):
 Lists objects in a bucket with optional prefix filtering.
 
 ```
-/ls [bucket] [prefix]
+/ls <bucket> [prefix]
 ```
 
-- Without arguments: lists objects in the default bucket
 - With bucket: lists objects in that bucket
 - With prefix: filters by key prefix (acts like a directory listing)
 
 Examples:
 ```
-/ls
 /ls photos
 /ls photos 2024/january/
 ```
@@ -59,17 +57,17 @@ Shows detailed information about a specific object.
 /info <bucket> <key>
 ```
 
-Output includes: size, content type, ETag, upload date, Telegram file ID, cache status, and any active shares.
+Output includes: size, content type, ETag, upload date, and bucket name.
 
 ### /search
 
-Searches objects across all buckets by key pattern.
+Searches objects in a bucket by key pattern.
 
 ```
-/search <query>
+/search <bucket> <query>
 ```
 
-The query matches against object keys using substring search.
+The query matches against object keys using substring search within the specified bucket.
 
 ### /share
 
@@ -79,10 +77,15 @@ Creates a share link for a file with optional restrictions.
 /share <bucket> <key>
 ```
 
-The bot will present inline buttons to configure:
-- **Expiry**: 1 hour, 24 hours, 7 days, 30 days, or no expiry
-- **Password**: optional password protection
-- **Max downloads**: optional download limit
+Optional parameters can be appended after the key:
+
+```
+/share <bucket> <key> [expiresIn_seconds] [password] [maxDownloads]
+```
+
+- **expiresIn**: expiry duration in seconds (default: no expiry)
+- **password**: password protection (default: none)
+- **maxDownloads**: download limit (default: unlimited)
 
 The generated link format: `https://your-worker.workers.dev/share/<token>`
 
@@ -127,7 +130,7 @@ Shows storage statistics across all buckets.
 /stats
 ```
 
-Output includes: total objects, total size, bucket count, active shares, pending multipart uploads.
+Output includes: total objects, total size, and bucket count.
 
 ### /setbucket
 
@@ -156,7 +159,7 @@ For photos sent as compressed images (not documents), the bot stores the highest
 Some commands trigger inline buttons for interactive workflows:
 
 - **Delete confirmation** -- "Yes, delete" / "Cancel" buttons after `/delete`
-- **Share configuration** -- Expiry and option selection after `/share`
+- **Revoke confirmation** -- "Confirm revoke" / "Cancel" buttons after `/revoke`
 - **Pagination** -- "Next page" / "Previous page" for long listings
 
 Callback data has a 5-10 minute TTL. If buttons stop responding, re-issue the command.

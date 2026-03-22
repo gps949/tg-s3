@@ -542,6 +542,9 @@ export async function handleUploadPartCopy(s3: S3Request, env: Env, ctx: Executi
   // SSE-C: parse copy-source encryption headers (for encrypted source objects)
   const srcEncrypted = isEncrypted(srcObj.system_metadata);
   const srcEncryptedS3 = isEncryptedS3(srcObj.system_metadata);
+  if (srcEncryptedS3 && !env.SSE_MASTER_KEY) {
+    return errorResponse(500, 'InternalError', 'Source object is SSE-S3 encrypted but SSE_MASTER_KEY is not configured.');
+  }
   let srcSse: ReturnType<typeof parseSseCHeaders> = null;
 
   if (srcEncrypted) {

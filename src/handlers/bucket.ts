@@ -95,8 +95,9 @@ export async function handleDeleteBucket(s3: S3Request, env: Env): Promise<Respo
     } catch { /* best effort - topic may already be deleted */ }
   }
 
-  // Clean all share tokens for this bucket
+  // Clean all share tokens and lifecycle rules for this bucket
   await store.deleteShareTokensByBucket(s3.bucket);
+  await store.deleteLifecycleRules(s3.bucket);
 
   await store.deleteBucket(s3.bucket);
   return new Response(null, { status: 204 });

@@ -94,6 +94,9 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
   // If source is encrypted (SSE-C), require source SSE-C headers
   const srcEncrypted = isEncrypted(srcObj.system_metadata);
   const srcEncryptedS3 = isEncryptedS3(srcObj.system_metadata);
+  if (srcEncryptedS3 && !env.SSE_MASTER_KEY) {
+    return errorResponse(500, 'InternalError', 'Source object is SSE-S3 encrypted but SSE_MASTER_KEY is not configured.');
+  }
   if (srcEncrypted && !srcSse) {
     return errorResponse(400, 'InvalidRequest', 'The source object was stored using SSE-C. You must provide the source encryption key headers.');
   }

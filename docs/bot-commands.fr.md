@@ -37,16 +37,14 @@ Buckets (3):
 Liste les objets d'un bucket avec filtrage optionnel par préfixe.
 
 ```
-/ls [bucket] [prefix]
+/ls <bucket> [prefix]
 ```
 
-- Sans argument : liste les objets du bucket par défaut
 - Avec un bucket : liste les objets de ce bucket
 - Avec un préfixe : filtre par préfixe de clé (fonctionne comme un listing de répertoire)
 
 Exemples :
 ```
-/ls
 /ls photos
 /ls photos 2024/january/
 ```
@@ -59,17 +57,17 @@ Affiche les informations détaillées d'un objet spécifique.
 /info <bucket> <key>
 ```
 
-Les informations comprennent : taille, type de contenu, ETag, date d'envoi, file ID Telegram, état du cache et partages actifs éventuels.
+Les informations comprennent : taille, type de contenu, ETag, date d'envoi et nom du bucket.
 
 ### /search
 
-Recherche des objets dans tous les buckets par motif de clé.
+Recherche des objets dans un bucket par motif de clé.
 
 ```
-/search <query>
+/search <bucket> <query>
 ```
 
-La requête est comparée aux clés des objets par recherche de sous-chaîne.
+La requête est comparée aux clés des objets par recherche de sous-chaîne dans le bucket spécifié.
 
 ### /share
 
@@ -79,10 +77,15 @@ Crée un lien de partage pour un fichier avec des restrictions optionnelles.
 /share <bucket> <key>
 ```
 
-Le bot présentera des boutons inline pour configurer :
-- **Expiration** : 1 heure, 24 heures, 7 jours, 30 jours, ou sans expiration
-- **Mot de passe** : protection par mot de passe optionnelle
-- **Nombre maximal de téléchargements** : limite de téléchargement optionnelle
+Des paramètres optionnels peuvent etre ajoutés apres la clé :
+
+```
+/share <bucket> <key> [expiration_secondes] [mot_de_passe] [max_telechargements]
+```
+
+- **Expiration** : durée d'expiration en secondes (par défaut : sans expiration)
+- **Mot de passe** : protection par mot de passe (par défaut : aucun)
+- **Max téléchargements** : limite de téléchargement (par défaut : illimité)
 
 Format du lien généré : `https://your-worker.workers.dev/share/<token>`
 
@@ -127,7 +130,7 @@ Affiche les statistiques de stockage pour l'ensemble des buckets.
 /stats
 ```
 
-Les informations comprennent : nombre total d'objets, taille totale, nombre de buckets, partages actifs, uploads multipart en cours.
+Les informations comprennent : nombre total d'objets, taille totale et nombre de buckets.
 
 ### /setbucket
 
@@ -156,7 +159,7 @@ Pour les photos envoyées en tant qu'images compressées (pas en tant que docume
 Certaines commandes déclenchent des boutons inline pour des flux interactifs :
 
 - **Confirmation de suppression** -- Boutons "Oui, supprimer" / "Annuler" après `/delete`
-- **Configuration du partage** -- Sélection de l'expiration et des options après `/share`
+- **Confirmation de révocation** -- Boutons "Confirmer" / "Annuler" après `/revoke`
 - **Pagination** -- "Page suivante" / "Page précédente" pour les listings longs
 
 Les données de callback ont un TTL de 5 à 10 minutes. Si les boutons ne répondent plus, relancez la commande.
