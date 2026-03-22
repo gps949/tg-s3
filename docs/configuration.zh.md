@@ -128,4 +128,4 @@ crons = ["0 */6 * * *"]  # 每 6 小时执行维护任务
 | 每频道消息数 | 约 20/分钟 |
 | 全局消息速率 | 约 30/秒 |
 | 文件下载 | 20 MB（Bot API）/ 2 GB（Local Bot API） |
-| 文件上传 | 50 MB（Bot API）/ 2 GB（Local Bot API） |
+| 文件上传 | 20 MB（Bot API，与下载限制对齐）/ 2 GB（Local Bot API） |

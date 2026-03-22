@@ -128,4 +128,4 @@ The scheduled handler runs every 6 hours and performs:
 | Messages per channel | ~20/minute |
 | Global message rate | ~30/second |
 | File download | 20 MB (Bot API) / 2 GB (Local Bot API) |
-| File upload | 50 MB (Bot API) / 2 GB (Local Bot API) |
+| File upload | 20 MB (Bot API, aligned with download limit) / 2 GB (Local Bot API) |

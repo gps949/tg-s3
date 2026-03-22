@@ -128,4 +128,4 @@ Le gestionnaire planifié s'exécute toutes les 6 heures et effectue :
 | Messages par canal | ~20/minute |
 | Débit global de messages | ~30/seconde |
 | Téléchargement de fichier | 20 Mo (API Bot) / 2 Go (API Bot locale) |
-| Envoi de fichier | 50 Mo (API Bot) / 2 Go (API Bot locale) |
+| Envoi de fichier | 20 Mo (API Bot, aligné sur la limite de téléchargement) / 2 Go (API Bot locale) |

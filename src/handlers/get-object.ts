@@ -135,7 +135,7 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   // Handle GetObject with partNumber (return a specific part of a multipart-uploaded object)
   const partNumberParam = s3.query.get('partNumber');
   if (partNumberParam) {
-    return handlePartNumberGet(s3, obj, headers, parseInt(partNumberParam, 10), env);
+    return handlePartNumberGet(s3, obj, headers, parseInt(partNumberParam, 10), env, sseParams, objEncryptedS3);
   }
 
   // Auto-convert HEIC/HEIF to web-compatible format (browsers can't display HEIC natively)
@@ -151,6 +151,10 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
   const quality = s3.query.get('q');
   const fmtAuto = format === 'auto';
   if ((width || format || quality) && isImageContentType(obj.content_type) && !obj.content_type.includes('svg')) {
+    // Encrypted objects cannot be processed for variants (VPS would receive ciphertext)
+    if (objEncrypted || objEncryptedS3) {
+      return errorResponse(400, 'InvalidRequest', 'Image variants are not supported for encrypted objects.');
+    }
     // Resolve fmt=auto from Accept header (AVIF > WebP > JPEG)
     if (fmtAuto) {
       const accept = s3.headers.get('accept') || '';
@@ -288,6 +292,8 @@ export async function handleGetObject(s3: S3Request, env: Env, ctx?: ExecutionCo
 async function handlePartNumberGet(
   s3: S3Request, obj: ObjectRow, headers: Record<string, string>,
   partNumber: number, env: Env,
+  sseParams: ReturnType<typeof parseSseCHeaders>,
+  encryptedS3: boolean,
 ): Promise<Response> {
   // Extract part sizes from system metadata (stored during CompleteMultipartUpload)
   let partSizes: number[] | undefined;
@@ -304,15 +310,37 @@ async function handlePartNumberGet(
     return errorResponse(400, 'InvalidPartNumber', 'The requested partNumber is not valid.');
   }
 
-  // Calculate byte range for this part
+  // Calculate byte range for this part (plaintext offsets)
   let start = 0;
   for (let i = 0; i < partNumber - 1; i++) start += partSizes[i];
   const partSize = partSizes[partNumber - 1];
   const end = start + partSize - 1;
 
+  const needsDecrypt = !!(sseParams || (encryptedS3 && env.SSE_MASTER_KEY));
+
   // Download and serve the part range
   let data: ArrayBuffer;
-  if (obj.size <= MAX_DIRECT_DOWNLOAD) {
+  if (needsDecrypt) {
+    // AES-GCM: must decrypt full file, then slice to part range
+    const keyBase64 = sseParams ? sseParams.keyBase64 : env.SSE_MASTER_KEY!;
+    if (obj.size <= MAX_DIRECT_DOWNLOAD) {
+      const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
+      let full = await tgRes.arrayBuffer();
+      if (sseParams) full = await decrypt(full, sseParams.keyBase64);
+      else if (encryptedS3 && env.SSE_MASTER_KEY) full = await decryptS3(full, env.SSE_MASTER_KEY);
+      data = full.slice(start, end + 1);
+    } else if (env.VPS_URL) {
+      try {
+        const vps = new VpsClient(env);
+        const vpsRes = await vps.proxyGetDecrypt(obj.tg_file_id, keyBase64, start, end);
+        data = await vpsRes.arrayBuffer();
+      } catch {
+        return errorResponse(503, 'ServiceUnavailable', 'Storage backend temporarily unavailable.');
+      }
+    } else {
+      return errorResponse(503, 'ServiceUnavailable', 'Encrypted file exceeds 20MB and requires VPS proxy.');
+    }
+  } else if (obj.size <= MAX_DIRECT_DOWNLOAD) {
     const tgRes = await downloadFromTelegram(obj.tg_file_id, env);
     const full = await tgRes.arrayBuffer();
     data = full.slice(start, end + 1);

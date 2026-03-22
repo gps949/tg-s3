@@ -83,7 +83,7 @@ app.post('/api/proxy/get', async (req, res) => {
     const { file_id } = req.body;
     const filePath = await getFilePath(file_id);
     const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
-    const tgRes = await fetch(url);
+    const tgRes = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_TRANSFER) });
     if (!tgRes.ok) return res.status(502).json({ error: `TG download failed: ${tgRes.status}` });
 
     res.set('Content-Type', tgRes.headers.get('content-type') || 'application/octet-stream');
@@ -151,6 +151,7 @@ app.post('/api/proxy/range', async (req, res) => {
 
     const tgRes = await fetch(url, {
       headers: { 'Range': `bytes=${start}-${end}` },
+      signal: AbortSignal.timeout(TIMEOUT_TRANSFER),
     });
 
     res.status(tgRes.status);
