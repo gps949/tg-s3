@@ -99,8 +99,11 @@ Share links support:
 Lists all active (non-expired, non-exhausted) share tokens.
 
 ```
-/shares
+/shares [bucket]
 ```
+
+- Without bucket: lists shares for all buckets
+- With bucket: lists shares for the specified bucket only
 
 Shows token, linked file, creation date, expiry, download count, and password status.
 
@@ -134,7 +137,7 @@ Output includes: total objects, total size, and bucket count.
 
 ### /setbucket
 
-Sets the default bucket for subsequent commands that accept an optional bucket parameter.
+Sets the default bucket for file uploads (sending files directly to the bot).
 
 ```
 /setbucket <name>

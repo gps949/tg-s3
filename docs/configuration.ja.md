@@ -13,6 +13,14 @@
 | `TG_BOT_TOKEN` | @BotFather から取得した Telegram Bot API トークン | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `DEFAULT_CHAT_ID` | Telegram グループ/スーパーグループの Chat ID | `-1001234567890` |
 
+### 推奨
+
+| 変数 | 説明 | 例 |
+|------|------|-----|
+| `TG_ADMIN_IDS` | Bot の使用を許可する Telegram ユーザー ID（カンマ区切り）。未設定の場合、誰でも使用可能。 | `123456789,987654321` |
+
+Telegram ユーザー ID の確認方法: [@userinfobot](https://t.me/userinfobot) にメッセージを送信。
+
 ### 自動生成（手動設定不要）
 
 | 変数 | 説明 | 生成元 |

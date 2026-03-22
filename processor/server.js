@@ -466,28 +466,29 @@ app.post('/api/proxy/consolidate', async (req, res) => {
 // Image resize endpoint (synchronous, for Worker to call directly)
 app.get('/api/image/resize', async (req, res) => {
   try {
-    const { tg_file_id, width, format } = req.query;
+    const { tg_file_id, width, format, quality } = req.query;
     const filePath = await getFilePath(tg_file_id);
     const url = `${TG_API}/file/bot${BOT_TOKEN}/${filePath}`;
     const tgRes = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_TRANSFER) });
     if (!tgRes.ok) return res.status(502).json({ error: 'TG download failed' });
 
     const inputBuffer = Buffer.from(await tgRes.arrayBuffer());
-    let pipeline = sharp(inputBuffer);
+    let img = sharp(inputBuffer);
 
     if (width) {
-      pipeline = pipeline.resize(parseInt(width, 10), null, { withoutEnlargement: true });
+      img = img.resize(parseInt(width, 10), null, { withoutEnlargement: true });
     }
 
     const fmt = format || 'jpeg';
+    const q = quality ? parseInt(quality, 10) : undefined;
     switch (fmt) {
-      case 'webp': pipeline = pipeline.webp({ quality: 80 }); break;
-      case 'png': pipeline = pipeline.png(); break;
-      case 'avif': pipeline = pipeline.avif({ quality: 65 }); break;
-      default: pipeline = pipeline.jpeg({ quality: 90, mozjpeg: true }); break;
+      case 'webp': img = img.webp({ quality: q || 80 }); break;
+      case 'png': img = img.png(); break;
+      case 'avif': img = img.avif({ quality: q || 65 }); break;
+      default: img = img.jpeg({ quality: q || 90, mozjpeg: true }); break;
     }
 
-    const output = await pipeline.toBuffer();
+    const output = await img.toBuffer();
     const mimeMap = { jpeg: 'image/jpeg', webp: 'image/webp', png: 'image/png', avif: 'image/avif' };
 
     res.set('Content-Type', mimeMap[fmt] || 'image/jpeg');

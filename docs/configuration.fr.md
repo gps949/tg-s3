@@ -13,6 +13,14 @@ Toute la configuration se fait via des variables d'environnement. Pour le déplo
 | `TG_BOT_TOKEN` | Token API du bot Telegram, obtenu via @BotFather | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `DEFAULT_CHAT_ID` | Chat ID du groupe/supergroupe Telegram | `-1001234567890` |
 
+### Recommandées
+
+| Variable | Description | Exemple |
+|----------|-------------|---------|
+| `TG_ADMIN_IDS` | IDs utilisateur Telegram autorisés (séparés par virgule). Si non défini, tout le monde peut utiliser le bot. | `123456789,987654321` |
+
+Pour trouver votre ID Telegram, envoyez un message à [@userinfobot](https://t.me/userinfobot).
+
 ### Générées automatiquement (pas besoin de les définir)
 
 | Variable | Description | Générée par |

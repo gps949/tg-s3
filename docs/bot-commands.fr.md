@@ -99,8 +99,11 @@ Les liens de partage supportent :
 Liste tous les tokens de partage actifs (non expirés, non épuisés).
 
 ```
-/shares
+/shares [bucket]
 ```
+
+- Sans bucket : liste les partages de tous les buckets
+- Avec bucket : liste uniquement les partages du bucket spécifié
 
 Affiche le token, le fichier associé, la date de création, l'expiration, le nombre de téléchargements et le statut du mot de passe.
 
@@ -134,7 +137,7 @@ Les informations comprennent : nombre total d'objets, taille totale et nombre de
 
 ### /setbucket
 
-Définit le bucket par défaut pour les commandes suivantes qui acceptent un paramètre de bucket optionnel.
+Définit le bucket par défaut pour l'envoi de fichiers directement au bot.
 
 ```
 /setbucket <name>

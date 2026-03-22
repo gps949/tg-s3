@@ -45,9 +45,11 @@ function routeS3Request(method: string, path: string, query: URLSearchParams): S
 
 ### 不支持的子资源操作安全网
 
-路由在匹配数据操作（GetObject/HeadObject/PutObject/DeleteObject）之前，会检查请求是否携带不支持的 S3 子资源查询参数（如 `?acl`, `?tagging`, `?policy` 等）。如果匹配到不支持的子资源，返回 `501 NotImplemented` 而非落到数据操作。这防止了客户端发送 `PUT /{bucket}/{key}?acl` 时将 ACL XML body 当作文件内容覆盖写入的数据损坏风险。
+路由在匹配数据操作（GetObject/HeadObject/PutObject/DeleteObject）之前，会检查请求是否携带不支持的 S3 子资源查询参数（如 `?acl`, `?policy` 等）。如果匹配到不支持的子资源，返回 `501 NotImplemented` 而非落到数据操作。这防止了客户端发送 `PUT /{bucket}/{key}?acl` 时将 ACL XML body 当作文件内容覆盖写入的数据损坏风险。
 
-拦截的子资源列表: `acl`, `tagging`, `policy`, `cors`, `lifecycle`, `encryption`, `notification`, `replication`, `website`, `logging`, `analytics`, `metrics`, `inventory`, `accelerate`, `requestPayment`, `object-lock`, `legal-hold`, `retention`, `torrent`, `restore`, `select`, `intelligent-tiering`, `ownershipControls`, `publicAccessBlock`, `versions`。
+已实现的子资源: `tagging`（对象标签）、`lifecycle`（生命周期规则）、`uploads`/`uploadId`（分段上传）。
+
+拦截的子资源列表: `acl`, `policy`, `cors`, `encryption`, `notification`, `replication`, `website`, `logging`, `analytics`, `metrics`, `inventory`, `accelerate`, `requestPayment`, `object-lock`, `legal-hold`, `retention`, `torrent`, `restore`, `select`, `intelligent-tiering`, `ownershipControls`, `publicAccessBlock`, `versions`。
 
 ## 路径格式
 
@@ -375,9 +377,9 @@ Telegram Mini App 通过 WebApp initData 认证：
 以下限制源于 Telegram 存储后端：
 
 - 单文件大小上限: 2GB（Local Bot API）或 20MB（标准 Bot API，上传与下载对齐）
-- 无服务端加密（SSE）: 加密由 Telegram 管控
+- 支持 SSE-C（客户提供密钥）和 SSE-S3（服务端管理密钥，需配置 `SSE_MASTER_KEY`）
+- 支持生命周期规则（基于前缀和标签的对象过期，cron 定期执行）
 - 无存储类别: 所有对象等同于 STANDARD
-- 无生命周期策略: 使用 cron 替代
 - 无对象锁定/保留: 不适用于 Telegram 存储
 - 无 Bucket Policy / ACL: 单用户系统，使用 Bearer Token 或 SigV4 认证
 

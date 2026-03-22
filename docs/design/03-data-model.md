@@ -78,13 +78,16 @@ CREATE TABLE chunks (
 
 ```sql
 CREATE TABLE buckets (
-    name            TEXT    PRIMARY KEY,
-    created_at      TEXT    NOT NULL,               -- ISO 8601
-    tg_chat_id      TEXT    NOT NULL,               -- Supergroup ID
-    tg_topic_id     INTEGER,                         -- Forum Topic ID (每个 Bucket 一个 Topic)
-    description     TEXT,                            -- 可选描述
-    object_count    INTEGER NOT NULL DEFAULT 0,     -- 缓存计数，非精确
-    total_size      INTEGER NOT NULL DEFAULT 0      -- 缓存总大小，非精确
+    name               TEXT    PRIMARY KEY,
+    created_at         TEXT    NOT NULL,               -- ISO 8601
+    tg_chat_id         TEXT    NOT NULL,               -- Supergroup ID
+    tg_topic_id        INTEGER,                        -- Forum Topic ID (每个 Bucket 一个 Topic)
+    description        TEXT,                           -- 可选描述
+    object_count       INTEGER NOT NULL DEFAULT 0,     -- 缓存计数，非精确
+    total_size         INTEGER NOT NULL DEFAULT 0,     -- 缓存总大小，非精确
+    is_public          INTEGER NOT NULL DEFAULT 0,     -- 1 = 允许无认证 GET/HEAD
+    optimize_config    TEXT,                           -- JSON: OptimizeConfig (图片自动转换)
+    default_encryption INTEGER NOT NULL DEFAULT 0      -- 1 = 自动 SSE-S3 加密上传
 );
 ```
 
@@ -194,6 +197,40 @@ CREATE TABLE credentials (
 SigV4 认证流程中，通过 Access Key ID 查询对应的 Secret Access Key 进行签名验证。
 凭证带 60s 内存缓存，PATCH/DELETE 操作时主动失效缓存。
 权限级别：`admin`（全部操作）、`readwrite`（读写，不含凭证管理和 Bucket 删除）、`readonly`（只读）。
+
+### object_tags 表（S3 对象标签）
+
+```sql
+CREATE TABLE object_tags (
+    bucket          TEXT    NOT NULL,
+    key             TEXT    NOT NULL,
+    tag_key         TEXT    NOT NULL,
+    tag_value       TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (bucket, key, tag_key),
+    FOREIGN KEY (bucket, key) REFERENCES objects (bucket, key) ON DELETE CASCADE
+);
+```
+
+每个对象最多 10 个标签（S3 标准），用于 GetObjectTagging / PutObjectTagging / DeleteObjectTagging 操作，也用于生命周期规则的标签筛选。
+
+### lifecycle_rules 表（生命周期规则）
+
+```sql
+CREATE TABLE lifecycle_rules (
+    id              TEXT    PRIMARY KEY,
+    bucket          TEXT    NOT NULL,
+    prefix          TEXT    NOT NULL DEFAULT '',
+    expiration_days INTEGER NOT NULL,
+    tag_key         TEXT,
+    tag_value       TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (bucket) REFERENCES buckets (name) ON DELETE CASCADE
+);
+CREATE INDEX idx_lifecycle_bucket ON lifecycle_rules (bucket);
+```
+
+支持按前缀和标签筛选的过期策略。Cron 定时任务每 6 小时检查并删除匹配的过期对象。
 
 ## 速率限制设计
 

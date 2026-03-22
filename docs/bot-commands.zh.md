@@ -99,8 +99,11 @@ Buckets (3):
 列出所有活跃的（未过期、未用尽）分享 token。
 
 ```
-/shares
+/shares [bucket]
 ```
+
+- 不指定 bucket：列出所有存储桶的分享
+- 指定 bucket：仅列出该存储桶的分享
 
 显示 token、关联文件、创建日期、过期时间、下载次数和密码状态。
 
@@ -134,7 +137,7 @@ Buckets (3):
 
 ### /setbucket
 
-设置默认存储桶，后续接受可选 bucket 参数的命令将使用该存储桶。
+设置默认存储桶，用于直接向 Bot 发送文件时的上传目标。
 
 ```
 /setbucket <name>

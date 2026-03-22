@@ -255,7 +255,7 @@ binding = "CACHE"
 bucket_name = "tg-s3-cache"
 
 [triggers]
-crons = ["0 */6 * * *"]  # 每 6 小时: 7 项清理 (过期/孤儿分享, 过期 multipart, D1-TG 一致性, R2 缓存, 密码锁定, 孤儿分块)
+crons = ["0 */6 * * *"]  # 每 6 小时: 8 项清理 (过期/孤儿分享, 过期 multipart, D1-TG 一致性, R2 缓存, 密码锁定, 孤儿分块, 生命周期过期)
 ```
 
 ### Worker 项目结构
@@ -302,7 +302,7 @@ src/
 │   └── parser.ts           # S3 XML 请求解析器
 └── utils/
     ├── crypto.ts           # SHA256, HMAC, PBKDF2
-    ├── md5.ts              # 纯 JS MD5 实现 (CF Workers 不支持 node:crypto)
+    ├── sse.ts              # SSE-C / SSE-S3 加密工具 (AES-256-GCM via Web Crypto)
     ├── path.ts             # S3 路径解析
     ├── headers.ts          # S3 headers/Range/ETag 处理
     └── format.ts           # 共享格式化工具 (formatSize, escHtml)

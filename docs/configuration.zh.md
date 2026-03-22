@@ -13,6 +13,14 @@
 | `TG_BOT_TOKEN` | 从 @BotFather 获取的 Telegram Bot API token | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `DEFAULT_CHAT_ID` | Telegram 群组/超级群组的 chat ID | `-1001234567890` |
 
+### 推荐
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `TG_ADMIN_IDS` | 允许使用 Bot 的 Telegram 用户 ID（逗号分隔）。未设置则任何用户都可使用。 | `123456789,987654321` |
+
+获取 Telegram 用户 ID：向 [@userinfobot](https://t.me/userinfobot) 发送任意消息。
+
 ### 自动生成（无需手动设置）
 
 | 变量 | 说明 | 生成方式 |
