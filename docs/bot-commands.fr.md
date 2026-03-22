@@ -2,7 +2,7 @@
 
 [English](bot-commands.md) | [中文](bot-commands.zh.md) | [日本語](bot-commands.ja.md) | [Français](bot-commands.fr.md)
 
-## Apercu
+## Aperçu
 
 Le bot TG-S3 fournit une interface Telegram pour gérer votre stockage S3. Toutes les commandes fonctionnent dans le groupe de stockage désigné ou en messages directs avec le bot.
 
@@ -77,7 +77,7 @@ Crée un lien de partage pour un fichier avec des restrictions optionnelles.
 /share <bucket> <key>
 ```
 
-Des paramètres optionnels peuvent etre ajoutés apres la clé :
+Des paramètres optionnels peuvent être ajoutés après la clé :
 
 ```
 /share <bucket> <key> [expiration_secondes] [mot_de_passe] [max_telechargements]

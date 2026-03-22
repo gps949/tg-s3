@@ -16,7 +16,7 @@ function contentDisposition(disposition: 'inline' | 'attachment', filename: stri
   // RFC 2616 quoted-string: escape \ and " inside filename parameter
   const escapeQuoted = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   // UTF-8 encoded filename per RFC 5987
-  const utf8Name = encodeURIComponent(filename).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  const utf8Name = encodeURIComponent(filename).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   if (asciiFallback === filename) {
     return `${disposition}; filename="${escapeQuoted(filename)}"`;
   }

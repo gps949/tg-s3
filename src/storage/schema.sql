@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS lifecycle_rules (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lifecycle_bucket ON lifecycle_rules (bucket);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_enabled ON lifecycle_rules (enabled, bucket);
 
 -- [Phase 2 预留] 分块上传/下载实现时需要的 objects 表扩展:
 -- ALTER TABLE objects ADD COLUMN is_chunked INTEGER NOT NULL DEFAULT 0;
