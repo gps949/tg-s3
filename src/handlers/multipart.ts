@@ -12,7 +12,7 @@ import { initiateMultipartXml, completeMultipartXml, listPartsXml, listMultipart
 import { BOT_API_GETFILE_LIMIT, VPS_SINGLE_FILE_MAX, S3_MIN_PART_SIZE, S3_MAX_KEYS_DEFAULT, S3_MAX_PART_NUMBER } from '../constants';
 import { VpsClient } from '../media/vps-client';
 import { parseCompleteMultipart } from '../xml/parser';
-import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError } from '../utils/sse';
+import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError, encryptS3, addSseS3Metadata } from '../utils/sse';
 
 function clampInt(val: string | null, defaultVal: number, min: number, max: number): number {
   const n = parseInt(val || String(defaultVal), 10);
@@ -36,12 +36,25 @@ export async function handleCreateMultipartUpload(s3: S3Request, env: Env): Prom
     throw e;
   }
 
+  // SSE-S3: determine if server-side encryption should be applied
+  const sseS3Header = s3.headers.get('x-amz-server-side-encryption');
+  if (sseS3Header && sseS3Header !== 'AES256') {
+    return errorResponse(400, 'InvalidArgument', 'The encryption method specified is not supported. Supported: AES256.');
+  }
+  if (sseS3Header === 'AES256' && !env.SSE_MASTER_KEY) {
+    return errorResponse(400, 'InvalidArgument', 'SSE-S3 is not configured. Set SSE_MASTER_KEY secret.');
+  }
+  const useSseS3 = !sseParams && !!env.SSE_MASTER_KEY && (
+    sseS3Header === 'AES256' || !!bucket.default_encryption
+  );
+
   const uploadId = crypto.randomUUID();
   const contentType = s3.headers.get('content-type') || 'application/octet-stream';
   const userMeta = extractUserMetadata(s3.headers);
   const metaJson = Object.keys(userMeta).length > 0 ? JSON.stringify(userMeta) : undefined;
   let sysMeta = extractSystemMetadata(s3.headers);
   if (sseParams) sysMeta = addSseMetadata(sysMeta || {}, sseParams);
+  if (useSseS3) sysMeta = addSseS3Metadata(sysMeta || {});
   const sysMetaJson = sysMeta ? JSON.stringify(sysMeta) : undefined;
 
   await store.createMultipartUpload(uploadId, s3.bucket, s3.key, contentType, metaJson, sysMetaJson);
@@ -50,6 +63,8 @@ export async function handleCreateMultipartUpload(s3: S3Request, env: Env): Prom
   if (sseParams) {
     resp.headers.set('x-amz-server-side-encryption-customer-algorithm', 'AES256');
     resp.headers.set('x-amz-server-side-encryption-customer-key-MD5', sseParams.keyMd5);
+  } else if (useSseS3) {
+    resp.headers.set('x-amz-server-side-encryption', 'AES256');
   }
   return resp;
 }
@@ -219,23 +234,27 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
   let uploadResult: UploadResult;
   let etag: string;
 
-  // Check if upload has SSE-C metadata (for encrypting the final consolidated file)
+  // Check if upload has encryption metadata (SSE-C or SSE-S3)
   let uploadSseKeyBase64: string | null = null;
   let uploadSseKeyMd5: string | null = null;
+  let uploadUseSseS3 = false;
   if (upload.system_metadata) {
     try {
       const sm = JSON.parse(upload.system_metadata);
       if (sm._sse === 'AES256') {
         uploadSseKeyMd5 = sm._sse_key_md5;
-        // SSE-C key is needed for final encryption. S3 clients don't send it on CompleteMultipartUpload,
-        // but if provided (e.g. by tg-s3-aware clients), we use it. Parts are stored unencrypted.
+        // SSE-C: parts are stored unencrypted, key is required to encrypt the final consolidated file.
         const sseParams = parseSseCHeaders(s3.headers);
-        if (sseParams) {
-          if (sseParams.keyMd5 !== uploadSseKeyMd5) {
-            return errorResponse(400, 'InvalidArgument', 'The SSE-C key does not match the key used to initiate the multipart upload.');
-          }
-          uploadSseKeyBase64 = sseParams.keyBase64;
+        if (!sseParams) {
+          return errorResponse(400, 'InvalidRequest', 'This multipart upload was initiated with SSE-C. You must provide the encryption key to complete it.');
         }
+        if (sseParams.keyMd5 !== uploadSseKeyMd5) {
+          return errorResponse(400, 'InvalidArgument', 'The SSE-C key does not match the key used to initiate the multipart upload.');
+        }
+        uploadSseKeyBase64 = sseParams.keyBase64;
+      }
+      if (sm._sse_s3 === 'AES256') {
+        uploadUseSseS3 = true;
       }
     } catch { /* ignore */ }
   }
@@ -254,10 +273,12 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
 
     etag = await computeMultipartEtag(sortedParts.map(p => p.etag));
 
-    // SSE-C: encrypt consolidated file before uploading
+    // Encrypt consolidated file before uploading (SSE-C or SSE-S3)
     let uploadData: ArrayBuffer = combined.buffer as ArrayBuffer;
     if (uploadSseKeyBase64) {
       uploadData = await encrypt(uploadData, uploadSseKeyBase64);
+    } else if (uploadUseSseS3 && env.SSE_MASTER_KEY) {
+      uploadData = await encryptS3(uploadData, env.SSE_MASTER_KEY);
     }
 
     try {
@@ -276,6 +297,11 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
     }
   } else {
     // >20MB: delegate consolidation to VPS
+    // Guard: VPS consolidate cannot encrypt; reject if encryption is required
+    if (uploadSseKeyBase64 || (uploadUseSseS3 && env.SSE_MASTER_KEY)) {
+      return errorResponse(400, 'EntityTooLarge',
+        'Encrypted multipart uploads exceeding 20MB are not supported. Each encrypted multipart upload must have a combined size of 20MB or less.');
+    }
     try {
       const result = await consolidateViaVps(sortedParts, bucket.tg_chat_id, upload.key, upload.content_type || 'application/octet-stream', env, bucket.tg_topic_id);
       uploadResult = result;

@@ -12,7 +12,10 @@ import {
   parseSseCHeaders, validateKeyMd5, encrypt, decrypt,
   isEncrypted, getStoredKeyMd5, addSseMetadata, SseCError,
   SSE_HEADERS, SSE_COPY_HEADERS,
+  isEncryptedS3, decryptS3, encryptS3, addSseS3Metadata,
 } from '../utils/sse';
+import { BOT_API_GETFILE_LIMIT } from '../constants';
+import { VpsClient } from '../media/vps-client';
 
 export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const store = new MetadataStore(env);
@@ -88,8 +91,9 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
     throw e;
   }
 
-  // If source is encrypted, require source SSE-C headers
+  // If source is encrypted (SSE-C), require source SSE-C headers
   const srcEncrypted = isEncrypted(srcObj.system_metadata);
+  const srcEncryptedS3 = isEncryptedS3(srcObj.system_metadata);
   if (srcEncrypted && !srcSse) {
     return errorResponse(400, 'InvalidRequest', 'The source object was stored using SSE-C. You must provide the source encryption key headers.');
   }
@@ -104,8 +108,20 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
   const destBucket = await store.getBucket(s3.bucket);
   if (!destBucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
 
-  // Determine if re-encryption is needed (source encrypted or dest wants encryption)
-  const needsReEncrypt = srcEncrypted || !!destSse;
+  // Determine if destination wants SSE-S3
+  const sseS3Header = s3.headers.get('x-amz-server-side-encryption');
+  if (sseS3Header && sseS3Header !== 'AES256') {
+    return errorResponse(400, 'InvalidArgument', 'The encryption method specified is not supported. Supported: AES256.');
+  }
+  if (sseS3Header === 'AES256' && !env.SSE_MASTER_KEY) {
+    return errorResponse(400, 'InvalidArgument', 'SSE-S3 is not configured. Set SSE_MASTER_KEY secret.');
+  }
+  const destUseSseS3 = !destSse && !!env.SSE_MASTER_KEY && (
+    sseS3Header === 'AES256' || !!destBucket.default_encryption
+  );
+
+  // Determine if re-encryption is needed (source encrypted, or dest wants encryption)
+  const needsReEncrypt = srcEncrypted || srcEncryptedS3 || !!destSse || destUseSseS3;
 
   let tgChatId = srcObj.tg_chat_id;
   let tgMessageId = srcObj.tg_message_id;
@@ -113,14 +129,32 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
 
   if (needsReEncrypt && srcObj.size > 0) {
     // Must download, decrypt source, re-encrypt for dest, re-upload
-    const tgRes = await downloadFromTelegram(srcObj.tg_file_id, env);
-    let data = await tgRes.arrayBuffer();
+    let data: ArrayBuffer;
+    if (srcObj.size <= BOT_API_GETFILE_LIMIT) {
+      const tgRes = await downloadFromTelegram(srcObj.tg_file_id, env);
+      data = await tgRes.arrayBuffer();
+    } else if (env.VPS_URL) {
+      const vps = new VpsClient(env);
+      const vpsRes = await vps.proxyGet(srcObj.tg_file_id);
+      data = await vpsRes.arrayBuffer();
+    } else {
+      return errorResponse(503, 'ServiceUnavailable', 'Source file exceeds 20MB and requires VPS proxy which is not configured.');
+    }
+
+    // Decrypt source
     if (srcEncrypted && srcSse) {
       data = await decrypt(data, srcSse.keyBase64);
+    } else if (srcEncryptedS3 && env.SSE_MASTER_KEY) {
+      data = await decryptS3(data, env.SSE_MASTER_KEY);
     }
+
+    // Re-encrypt for destination
     if (destSse) {
       data = await encrypt(data, destSse.keyBase64);
+    } else if (destUseSseS3) {
+      data = await encryptS3(data, env.SSE_MASTER_KEY!);
     }
+
     const result = await uploadToTelegram(data, destBucket.tg_chat_id, s3.key, srcObj.content_type, env, destBucket.tg_topic_id);
     tgChatId = result.tgChatId;
     tgMessageId = result.tgMessageId;
@@ -163,13 +197,20 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
     }
   }
 
-  // Add destination SSE-C metadata (or strip source SSE metadata if no dest encryption)
+  // Add destination encryption metadata (or strip source encryption metadata if no dest encryption)
   if (destSse) {
     systemMetadata = addSseMetadata(systemMetadata || {}, destSse);
-  } else if (srcEncrypted && systemMetadata) {
-    // Source was encrypted but dest is not: remove SSE metadata
+    // Remove any SSE-S3 metadata if switching to SSE-C
+    if (systemMetadata) delete systemMetadata._sse_s3;
+  } else if (destUseSseS3) {
+    systemMetadata = addSseS3Metadata(systemMetadata || {});
+    // Remove any SSE-C metadata if switching to SSE-S3
+    if (systemMetadata) { delete systemMetadata._sse; delete systemMetadata._sse_key_md5; }
+  } else if ((srcEncrypted || srcEncryptedS3) && systemMetadata) {
+    // Source was encrypted but dest is not: remove all encryption metadata
     delete systemMetadata._sse;
     delete systemMetadata._sse_key_md5;
+    delete systemMetadata._sse_s3;
     if (Object.keys(systemMetadata).length === 0) systemMetadata = undefined;
   }
 
@@ -210,6 +251,8 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
   if (destSse) {
     copyResp.headers.set('x-amz-server-side-encryption-customer-algorithm', 'AES256');
     copyResp.headers.set('x-amz-server-side-encryption-customer-key-MD5', destSse.keyMd5);
+  } else if (destUseSseS3) {
+    copyResp.headers.set('x-amz-server-side-encryption', 'AES256');
   }
   return copyResp;
 }

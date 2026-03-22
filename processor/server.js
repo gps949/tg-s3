@@ -39,6 +39,17 @@ app.use(authMiddleware);
 
 // --- Job queue (in-memory) ---
 const jobs = new Map();
+const JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Periodically purge completed/failed jobs older than TTL
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if ((job.status === 'completed' || job.status === 'failed') && job.finishedAt && now - job.finishedAt > JOB_TTL_MS) {
+      jobs.delete(id);
+    }
+  }
+}, 5 * 60 * 1000); // Every 5 minutes
 
 app.post('/api/jobs', async (req, res) => {
   const { bucket, key, tg_file_id, job_type } = req.body;
@@ -50,7 +61,7 @@ app.post('/api/jobs', async (req, res) => {
   // Process async
   processJob(jobId).catch(err => {
     const job = jobs.get(jobId);
-    if (job) { job.status = 'failed'; job.error = err.message; }
+    if (job) { job.status = 'failed'; job.error = err.message; job.finishedAt = Date.now(); }
   });
 });
 
@@ -359,6 +370,7 @@ async function processJob(jobId) {
 
   job.status = 'completed';
   job.results = results;
+  job.finishedAt = Date.now();
 }
 
 async function uploadDerivative(job, derivativeName, buffer, contentType) {
