@@ -432,7 +432,8 @@ function showBucketSettings(name) {
       '<div style="font-size:11px;color:var(--hint);margin-top:2px">' + esc(t('bucket_optimize_original_hint')) + '</div>' +
     '</div>' +
 
-    '<button class="btn" style="width:100%;margin-top:12px" onclick="saveBucketSettings(\\'' + escJs(name) + '\\')">' + esc(t('save')) + '</button>'
+    '<button class="btn" style="width:100%;margin-top:12px" onclick="saveBucketSettings(\\'' + escJs(name) + '\\')">' + esc(t('save')) + '</button>' +
+    '<button class="btn btn-outline" style="width:100%;margin-top:8px" onclick="closeModal();showSyncSetup(\\'' + escJs(name) + '\\')">' + esc(t('sync_setup_btn')) + '</button>'
   );
 
   // Toggle optimize fields visibility
@@ -441,6 +442,86 @@ function showBucketSettings(name) {
     if (this.checked) { fields.style.opacity = '1'; fields.style.pointerEvents = 'auto'; }
     else { fields.style.opacity = '0.4'; fields.style.pointerEvents = 'none'; }
   };
+}
+
+async function showSyncSetup(bucketName) {
+  var el = document.getElementById('keysView');
+  try {
+    var creds = await apiFetch('/api/miniapp/credentials');
+    var activeCred = creds.find(function(c) {
+      if (c.status !== 'active') return false;
+      if (c.permission === 'readonly') return false;
+      if (c.buckets === '*') return true;
+      return c.buckets.split(',').map(function(s){return s.trim()}).indexOf(bucketName) >= 0;
+    });
+    if (!activeCred) {
+      toast(t('sync_no_key'));
+      return;
+    }
+    var endpoint = API;
+    var akid = activeCred.access_key_id;
+    var secret = activeCred.secret_access_key;
+    var simpleToken = akid + ':' + secret;
+
+    showModal(
+      '<span class="modal-close" role="button" aria-label="Close" onclick="closeModal()">&times;</span>' +
+      '<h3>' + esc(t('sync_setup_title')) + '</h3>' +
+      '<div style="font-size:12px;color:var(--hint);margin-bottom:12px">' + esc(t('sync_setup_desc')) + '</div>' +
+
+      '<div class="form-group">' +
+        '<label>S3 Endpoint</label>' +
+        '<div style="display:flex;gap:6px"><input type="text" id="syncEndpoint" value="' + esc(endpoint) + '" readonly style="flex:1;font-size:12px;font-family:monospace">' +
+        '<button class="btn btn-sm btn-outline" onclick="copyText(document.getElementById(\\'syncEndpoint\\').value)">' + esc(t('copy')) + '</button></div>' +
+      '</div>' +
+
+      '<div class="form-group">' +
+        '<label>Bucket</label>' +
+        '<div style="display:flex;gap:6px"><input type="text" id="syncBucket" value="' + esc(bucketName) + '" readonly style="flex:1;font-size:12px;font-family:monospace">' +
+        '<button class="btn btn-sm btn-outline" onclick="copyText(document.getElementById(\\'syncBucket\\').value)">' + esc(t('copy')) + '</button></div>' +
+      '</div>' +
+
+      '<div class="form-group">' +
+        '<label>Access Key ID</label>' +
+        '<div style="display:flex;gap:6px"><input type="text" id="syncAKID" value="' + esc(akid) + '" readonly style="flex:1;font-size:12px;font-family:monospace">' +
+        '<button class="btn btn-sm btn-outline" onclick="copyText(document.getElementById(\\'syncAKID\\').value)">' + esc(t('copy')) + '</button></div>' +
+      '</div>' +
+
+      '<div class="form-group">' +
+        '<label>Secret Access Key</label>' +
+        '<div style="display:flex;gap:6px"><input type="text" id="syncSecret" value="' + esc(secret) + '" readonly style="flex:1;font-size:12px;font-family:monospace">' +
+        '<button class="btn btn-sm btn-outline" onclick="copyText(document.getElementById(\\'syncSecret\\').value)">' + esc(t('copy')) + '</button></div>' +
+      '</div>' +
+
+      '<div class="form-group">' +
+        '<label>Region</label>' +
+        '<div style="font-size:12px;font-family:monospace">auto</div>' +
+      '</div>' +
+
+      '<hr style="border:none;border-top:1px solid var(--secondary-bg);margin:12px 0">' +
+
+      '<div style="font-size:12px;color:var(--hint)">' +
+        '<div style="margin-bottom:8px"><strong>' + esc(t('sync_simple_api')) + '</strong></div>' +
+        '<div style="background:var(--secondary-bg);padding:8px;border-radius:6px;font-family:monospace;word-break:break-all;font-size:11px">' +
+          'curl -X PUT "' + esc(endpoint) + '/api/upload?bucket=' + esc(bucketName) + '&amp;key=photo.heic" \\\n' +
+          '  -H "Authorization: Bearer ' + esc(simpleToken) + '" \\\n' +
+          '  -H "Content-Type: image/heic" \\\n' +
+          '  --data-binary @photo.heic' +
+        '</div>' +
+      '</div>' +
+
+      '<hr style="border:none;border-top:1px solid var(--secondary-bg);margin:12px 0">' +
+
+      '<div style="font-size:12px;color:var(--hint)">' +
+        '<strong>' + esc(t('sync_recommended_apps')) + '</strong>' +
+        '<div style="margin-top:6px">' +
+          '<div style="margin:4px 0">\u{1F4F7} <b>Photos+ Cloud Library</b> ' + esc(t('sync_app_photos_plus')) + '</div>' +
+          '<div style="margin:4px 0">\u{1F504} <b>PhotoSync</b> (Premium) ' + esc(t('sync_app_photosync')) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  } catch(e) {
+    toast(e.message || 'Failed to load sync setup');
+  }
 }
 
 async function saveBucketSettings(name) {
