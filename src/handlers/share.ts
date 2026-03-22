@@ -250,18 +250,7 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     }
   }
 
-  // Actual file download: fetch file first, then increment count (avoids wasting quota on TG failures)
-  let fileResponse: Response;
-  try {
-    fileResponse = await serveFile(obj, env, 'attachment', request);
-  } catch {
-    const lang = detectLang(request);
-    return new Response(renderExpiredPage('download_failed', lang), {
-      status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
-  }
-
-  // File fetched successfully — now increment download count
+  // Atomically increment download count BEFORE serving file (prevents TOCTOU race)
   const allowed = await store.incrementShareDownload(token);
   if (!allowed) {
     return new Response(renderExpiredPage('max_downloads', lang), {
@@ -270,7 +259,16 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     });
   }
 
-  return fileResponse;
+  // Serve the file; rollback count on failure so TG errors don't waste quota
+  try {
+    return await serveFile(obj, env, 'attachment', request);
+  } catch {
+    await store.decrementShareDownload(token);
+    const lang = detectLang(request);
+    return new Response(renderExpiredPage('download_failed', lang), {
+      status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
 }
 
 async function serveFile(obj: ObjectRow, env: Env, disposition: 'inline' | 'attachment', request?: Request): Promise<Response> {

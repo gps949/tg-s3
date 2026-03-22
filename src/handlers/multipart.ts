@@ -273,7 +273,12 @@ export async function handleCompleteMultipartUpload(s3: S3Request, env: Env, ctx
       sortedParts.map(part => downloadFromTelegram(part.tg_file_id, env).then(r => r.arrayBuffer())),
     );
     let pos = 0;
-    for (const buf of downloads) {
+    for (let i = 0; i < downloads.length; i++) {
+      const buf = downloads[i];
+      if (buf.byteLength !== sortedParts[i].size) {
+        return errorResponse(500, 'InternalError',
+          `Part ${sortedParts[i].part_number} size mismatch: expected ${sortedParts[i].size}, got ${buf.byteLength}`);
+      }
       combined.set(new Uint8Array(buf), pos);
       pos += buf.byteLength;
     }

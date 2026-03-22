@@ -441,6 +441,13 @@ export class MetadataStore {
     return (result.meta.changes ?? 0) > 0;
   }
 
+  async decrementShareDownload(token: string): Promise<void> {
+    // Rollback a download count increment (used when file delivery fails after pre-increment)
+    await this.db.prepare(
+      `UPDATE share_tokens SET download_count = MAX(download_count - 1, 0) WHERE token = ?`
+    ).bind(token).run();
+  }
+
   async updateShareToken(token: string, updates: Partial<Pick<ShareTokenRow, 'expires_at' | 'password_hash' | 'max_downloads' | 'note'>>): Promise<void> {
     const sets: string[] = [];
     const params: (string | number | null)[] = [];

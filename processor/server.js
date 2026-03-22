@@ -90,14 +90,12 @@ app.post('/api/proxy/get', async (req, res) => {
     if (tgRes.headers.get('content-length')) res.set('Content-Length', tgRes.headers.get('content-length'));
 
     const reader = tgRes.body.getReader();
-    const pump = async () => {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) { res.end(); return; }
-        res.write(Buffer.from(value));
-      }
-    };
-    await pump();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { res.end(); return; }
+      const ok = res.write(Buffer.from(value));
+      if (!ok) await new Promise(resolve => res.once('drain', resolve));
+    }
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
@@ -154,7 +152,8 @@ app.post('/api/proxy/put', async (req, res) => {
     }
 
     const data = await tgRes.json();
-    const doc = data.result.document;
+    const doc = data.result?.document;
+    if (!doc) return res.status(502).json({ error: 'TG response missing document field' });
 
     res.json({
       tgChatId: chatId,
@@ -190,7 +189,8 @@ app.post('/api/proxy/range', async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done) { res.end(); return; }
-      res.write(Buffer.from(value));
+      const ok = res.write(Buffer.from(value));
+      if (!ok) await new Promise(resolve => res.once('drain', resolve));
     }
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: err.message });
@@ -277,7 +277,8 @@ app.post('/api/proxy/put-full', async (req, res) => {
     }
 
     const data = await tgRes.json();
-    const doc = data.result.document;
+    const doc = data.result?.document;
+    if (!doc) return res.status(502).json({ error: 'TG response missing document field' });
 
     res.json({
       etag,
@@ -343,7 +344,8 @@ app.post('/api/proxy/get-decrypt', async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      ws.write(Buffer.from(value));
+      const ok = ws.write(Buffer.from(value));
+      if (!ok) await new Promise(resolve => ws.once('drain', resolve));
     }
     await new Promise((resolve, reject) => { ws.end(resolve); ws.on('error', reject); });
 
@@ -433,8 +435,9 @@ app.post('/api/proxy/consolidate', async (req, res) => {
         const { done, value } = await reader.read();
         if (done) break;
         const buf = Buffer.from(value);
-        writeStream.write(buf);
         hash.update(buf);
+        const ok = writeStream.write(buf);
+        if (!ok) await new Promise(resolve => writeStream.once('drain', resolve));
       }
     }
 
@@ -480,7 +483,8 @@ app.post('/api/proxy/consolidate', async (req, res) => {
     }
 
     const data = await tgRes.json();
-    const doc = data.result.document;
+    const doc = data.result?.document;
+    if (!doc) return res.status(502).json({ error: 'TG response missing document field' });
 
     res.json({
       tgChatId: chat_id,
@@ -510,7 +514,8 @@ app.get('/api/image/resize', async (req, res) => {
     let img = sharp(inputBuffer);
 
     if (width) {
-      img = img.resize(parseInt(width, 10), null, { withoutEnlargement: true });
+      const w = Math.min(Math.max(parseInt(width, 10) || 0, 1), 8192);
+      img = img.resize(w, null, { withoutEnlargement: true });
     }
 
     const fmt = format || 'jpeg';
