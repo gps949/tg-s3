@@ -31,10 +31,17 @@ interface TgUpdate {
 }
 
 export async function handleWebhook(request: Request, env: Env): Promise<Response> {
-  const update = await request.json() as TgUpdate;
+  let update: TgUpdate;
+  try {
+    update = await request.json() as TgUpdate;
+  } catch {
+    // Return 200 to prevent Telegram from retrying a malformed update
+    return new Response('ok');
+  }
 
   // Handle callback queries (inline keyboard button presses)
   if (update.callback_query) {
+    if (!isAllowedUser(update.callback_query.from.id, env)) return new Response('ok');
     await handleCallbackQuery(update.callback_query, env);
     return new Response('ok');
   }
@@ -47,6 +54,12 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 
   // Only process commands from private chats (not from channels/groups)
   if (msg.chat.type !== 'private') return new Response('ok');
+
+  // Restrict bot access to allowed users (if TG_ADMIN_IDS is configured)
+  if (!isAllowedUser(msg.from?.id, env)) {
+    await sendMessage(chatId, botT(lang, 'access_denied'), env);
+    return new Response('ok');
+  }
 
   if (msg.text && msg.text.startsWith('/')) {
     const baseUrl = new URL(request.url).origin;
@@ -427,6 +440,13 @@ async function editMessageWithKeyboard(
     const body = await res.text().catch(() => '');
     console.error(`editMessageWithKeyboard failed (${res.status}): ${body}`);
   }
+}
+
+function isAllowedUser(userId: number | undefined, env: Env): boolean {
+  if (!env.TG_ADMIN_IDS) return true; // No restriction configured
+  if (!userId) return false;
+  const allowed = env.TG_ADMIN_IDS.split(',').map(id => id.trim());
+  return allowed.includes(userId.toString());
 }
 
 export async function registerWebhook(workerUrl: string, env: Env): Promise<boolean> {

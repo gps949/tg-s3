@@ -12,6 +12,9 @@ export interface Env {
   WORKER_URL?: string;
   // SSE-S3 master key (base64-encoded 32 bytes, generated with: openssl rand -base64 32)
   SSE_MASTER_KEY?: string;
+  // Comma-separated Telegram user IDs allowed to use the bot (e.g. "123456789,987654321")
+  // If not set, the bot accepts commands from any user (not recommended for production)
+  TG_ADMIN_IDS?: string;
 }
 
 // D1 row types

@@ -7,6 +7,7 @@ import { errorResponse } from '../xml/builder';
 import { BOT_API_GETFILE_LIMIT } from '../constants';
 import { parseRange } from '../utils/headers';
 import { detectLang } from '../i18n';
+import { signShareSession, timingSafeEqual } from '../utils/crypto';
 
 // RFC 6266 Content-Disposition with non-ASCII filename support
 function contentDisposition(disposition: 'inline' | 'attachment', filename: string): string {
@@ -148,14 +149,15 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     if (shareRow.max_downloads !== null && shareRow.download_count >= shareRow.max_downloads) {
       return new Response('Download limit reached', { status: 410 });
     }
-    // Password-protected shares: verify session cookie set after password entry
+    // Password-protected shares: verify HMAC-signed session cookie set after password entry
     if (shareRow.password_hash) {
       const cookieName = `sp_${token.slice(0, 16)}`;
       const cookies = request.headers.get('cookie') || '';
       const cookieMap = Object.fromEntries(
         cookies.split(';').map(c => c.trim().split('=').map(s => s.trim())).filter(p => p.length === 2)
       );
-      if (cookieMap[cookieName] !== '1') {
+      const expectedCookie = await signShareSession(env.TG_BOT_TOKEN, token);
+      if (!cookieMap[cookieName] || !timingSafeEqual(cookieMap[cookieName], expectedCookie)) {
         return new Response('Password required', { status: 403 });
       }
     }
@@ -177,8 +179,8 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     } catch { /* not form data */ }
   }
 
-  // If no password provided but session cookie exists (set after prior password verification),
-  // bypass password check by validating the share without password requirement.
+  // If no password provided but HMAC-signed session cookie exists (set after prior password
+  // verification), bypass password check by validating the share without password requirement.
   let hasSessionCookie = false;
   if (!password) {
     const cookieName = `sp_${token.slice(0, 16)}`;
@@ -186,7 +188,11 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     const cookieMap = Object.fromEntries(
       cookies.split(';').map(c => c.trim().split('=').map(s => s.trim())).filter(p => p.length === 2)
     );
-    hasSessionCookie = cookieMap[cookieName] === '1';
+    const cookieValue = cookieMap[cookieName];
+    if (cookieValue) {
+      const expectedCookie = await signShareSession(env.TG_BOT_TOKEN, token);
+      hasSessionCookie = timingSafeEqual(cookieValue, expectedCookie);
+    }
   }
 
   const clientIp = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '0.0.0.0';
@@ -230,9 +236,10 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     const accept = request.headers.get('accept') || '';
     if (accept.includes('text/html')) {
       const headers: Record<string, string> = { 'Content-Type': 'text/html; charset=utf-8' };
-      // Set session cookie for password-protected shares so inline/live-video can verify
+      // Set HMAC-signed session cookie for password-protected shares so inline/live-video can verify
       if (share.password_hash) {
-        headers['Set-Cookie'] = `sp_${token.slice(0, 16)}=1; Path=/share/${token}; HttpOnly; SameSite=Lax; Secure; Max-Age=3600`;
+        const cookieValue = await signShareSession(env.TG_BOT_TOKEN, token);
+        headers['Set-Cookie'] = `sp_${token.slice(0, 16)}=${cookieValue}; Path=/share/${token}; HttpOnly; SameSite=Lax; Secure; Max-Age=3600`;
       }
       return new Response(renderSharePage(obj, share, url.origin, lang), { headers });
     }

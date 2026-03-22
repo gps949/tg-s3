@@ -63,6 +63,7 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # .env を編集: TG_BOT_TOKEN、DEFAULT_CHAT_ID、CLOUDFLARE_API_TOKEN のみ必要
+# 推奨: TG_ADMIN_IDS を設定して Bot アクセスを制限（カンマ区切りのユーザー ID）
 ./deploy.sh
 ```
 

@@ -63,6 +63,7 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # Éditez .env : seuls TG_BOT_TOKEN, DEFAULT_CHAT_ID et CLOUDFLARE_API_TOKEN sont nécessaires
+# Recommandé : définir TG_ADMIN_IDS pour restreindre l'accès au bot (IDs séparés par virgule)
 ./deploy.sh
 ```
 

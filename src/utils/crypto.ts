@@ -57,6 +57,16 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return timingSafeEqual(bufToHex(derived), expected);
 }
 
+/** Sign a share session cookie so it cannot be forged without knowing the bot token */
+export async function signShareSession(botToken: string, shareToken: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(botToken), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(`share-session:${shareToken}`));
+  return Array.from(new Uint8Array(sig), b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
 /** Derive a deterministic webhook secret from the bot token (no separate env var needed) */
 export async function deriveWebhookSecret(botToken: string): Promise<string> {
   const encoder = new TextEncoder();

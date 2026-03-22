@@ -851,19 +851,37 @@ export class MetadataStore {
 
       if (rule.tag_key) {
         // Rule with tag filter: join with object_tags
-        query = `SELECT o.bucket, o.key FROM objects o
-          INNER JOIN object_tags t ON t.bucket = o.bucket AND t.key = o.key
-          WHERE o.bucket = ? AND o.key >= ? AND o.key < ? AND o.last_modified < ?
-          AND t.tag_key = ? AND t.tag_value = ?
-          AND o.derived_from IS NULL
-          LIMIT ?`;
-        binds = [rule.bucket, rule.prefix, rule.prefix + '\uffff', cutoff, rule.tag_key, rule.tag_value, limit - expired.length];
+        if (rule.prefix) {
+          query = `SELECT o.bucket, o.key FROM objects o
+            INNER JOIN object_tags t ON t.bucket = o.bucket AND t.key = o.key
+            WHERE o.bucket = ? AND o.key >= ? AND o.key < ? AND o.last_modified < ?
+            AND t.tag_key = ? AND t.tag_value = ?
+            AND o.derived_from IS NULL
+            LIMIT ?`;
+          binds = [rule.bucket, rule.prefix, prefixUpperBound(rule.prefix), cutoff, rule.tag_key, rule.tag_value, limit - expired.length];
+        } else {
+          query = `SELECT o.bucket, o.key FROM objects o
+            INNER JOIN object_tags t ON t.bucket = o.bucket AND t.key = o.key
+            WHERE o.bucket = ? AND o.last_modified < ?
+            AND t.tag_key = ? AND t.tag_value = ?
+            AND o.derived_from IS NULL
+            LIMIT ?`;
+          binds = [rule.bucket, cutoff, rule.tag_key, rule.tag_value, limit - expired.length];
+        }
       } else {
-        query = `SELECT bucket, key FROM objects
-          WHERE bucket = ? AND key >= ? AND key < ? AND last_modified < ?
-          AND derived_from IS NULL
-          LIMIT ?`;
-        binds = [rule.bucket, rule.prefix, rule.prefix + '\uffff', cutoff, limit - expired.length];
+        if (rule.prefix) {
+          query = `SELECT bucket, key FROM objects
+            WHERE bucket = ? AND key >= ? AND key < ? AND last_modified < ?
+            AND derived_from IS NULL
+            LIMIT ?`;
+          binds = [rule.bucket, rule.prefix, prefixUpperBound(rule.prefix), cutoff, limit - expired.length];
+        } else {
+          query = `SELECT bucket, key FROM objects
+            WHERE bucket = ? AND last_modified < ?
+            AND derived_from IS NULL
+            LIMIT ?`;
+          binds = [rule.bucket, cutoff, limit - expired.length];
+        }
       }
 
       const r = await this.db.prepare(query).bind(...binds).all<{ bucket: string; key: string }>();

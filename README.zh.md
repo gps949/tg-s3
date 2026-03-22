@@ -63,6 +63,7 @@ git clone https://github.com/gps949/tg-s3.git
 cd tg-s3
 cp .env.example .env
 # 编辑 .env: 填写 TG_BOT_TOKEN、DEFAULT_CHAT_ID、CLOUDFLARE_API_TOKEN
+# 建议设置 TG_ADMIN_IDS 限制 Bot 访问权限（逗号分隔的用户 ID）
 ./deploy.sh
 ```
 

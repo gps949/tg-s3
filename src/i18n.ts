@@ -1145,6 +1145,7 @@ export function botT(lang: Lang, key: string, ...args: (string | number)[]): str
 
 export const botStrings: Record<Lang, Record<string, string>> = {
   en: {
+    access_denied: 'Access denied. Your Telegram user ID is not in the allowed list.',
     unsupported_type: 'This message type is not supported. Please send files, photos, videos, audio, or voice.\nType /help for help.',
     send_file_hint: 'Send me a file to upload, or type /help for the command list.',
     confirm_expired: 'Confirmation expired. Please try again.',
@@ -1227,6 +1228,7 @@ export const botStrings: Record<Lang, Record<string, string>> = {
     photo_quality_hint: '\u{1F4A1} <i>Tip: Telegram compresses photos. To preserve original quality (HEIC, RAW), send as <b>File</b> instead (long press the attachment button and choose "File").</i>',
   },
   zh: {
+    access_denied: '\u62d2\u7edd\u8bbf\u95ee\u3002\u60a8\u7684 Telegram \u7528\u6237 ID \u4e0d\u5728\u5141\u8bb8\u5217\u8868\u4e2d\u3002',
     unsupported_type: '\u4e0d\u652f\u6301\u6b64\u6d88\u606f\u7c7b\u578b\uff0c\u8bf7\u53d1\u9001\u6587\u4ef6\u3001\u56fe\u7247\u3001\u89c6\u9891\u3001\u97f3\u9891\u6216\u8bed\u97f3\u3002\n\u8f93\u5165 /help \u67e5\u770b\u5e2e\u52a9\u3002',
     send_file_hint: '\u53d1\u9001\u6587\u4ef6\u7ed9\u6211\u5373\u53ef\u4e0a\u4f20\uff0c\u6216\u8f93\u5165 /help \u67e5\u770b\u547d\u4ee4\u5217\u8868\u3002',
     confirm_expired: '\u786e\u8ba4\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u64cd\u4f5c\u3002',
@@ -1309,6 +1311,7 @@ export const botStrings: Record<Lang, Record<string, string>> = {
     photo_quality_hint: '\u{1F4A1} <i>\u63d0\u793a\uff1aTelegram \u4f1a\u538b\u7f29\u56fe\u7247\u3002\u5982\u9700\u4fdd\u7559\u539f\u59cb\u753b\u8d28\uff08HEIC\u3001RAW\uff09\uff0c\u8bf7\u4ee5<b>\u6587\u4ef6</b>\u65b9\u5f0f\u53d1\u9001\uff08\u957f\u6309\u9644\u4ef6\u6309\u94ae\u9009\u201c\u6587\u4ef6\u201d\uff09\u3002</i>',
   },
   ja: {
+    access_denied: '\u30a2\u30af\u30bb\u30b9\u304c\u62d2\u5426\u3055\u308c\u307e\u3057\u305f\u3002\u3042\u306a\u305f\u306e Telegram \u30e6\u30fc\u30b6\u30fc ID \u306f\u8a31\u53ef\u30ea\u30b9\u30c8\u306b\u542b\u307e\u308c\u3066\u3044\u307e\u305b\u3093\u3002',
     unsupported_type: '\u3053\u306e\u30e1\u30c3\u30bb\u30fc\u30b8\u30bf\u30a4\u30d7\u306f\u30b5\u30dd\u30fc\u30c8\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002\u30d5\u30a1\u30a4\u30eb\u3001\u753b\u50cf\u3001\u52d5\u753b\u3001\u97f3\u58f0\u3092\u9001\u4fe1\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n/help \u3067\u30d8\u30eb\u30d7\u3092\u8868\u793a\u3002',
     send_file_hint: '\u30d5\u30a1\u30a4\u30eb\u3092\u9001\u4fe1\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3055\u308c\u307e\u3059\u3002/help \u3067\u30b3\u30de\u30f3\u30c9\u4e00\u89a7\u3092\u8868\u793a\u3002',
     confirm_expired: '\u78ba\u8a8d\u304c\u30bf\u30a4\u30e0\u30a2\u30a6\u30c8\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u64cd\u4f5c\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
@@ -1391,6 +1394,7 @@ export const botStrings: Record<Lang, Record<string, string>> = {
     photo_quality_hint: '\u{1F4A1} <i>\u30d2\u30f3\u30c8: Telegram\u306f\u753b\u50cf\u3092\u5727\u7e2e\u3057\u307e\u3059\u3002\u30aa\u30ea\u30b8\u30ca\u30eb\u54c1\u8cea\uff08HEIC\u3001RAW\uff09\u3092\u4fdd\u6301\u3059\u308b\u306b\u306f\u3001<b>\u30d5\u30a1\u30a4\u30eb</b>\u3068\u3057\u3066\u9001\u4fe1\u3057\u3066\u304f\u3060\u3055\u3044\u3002</i>',
   },
   fr: {
+    access_denied: "Acc\u00e8s refus\u00e9. Votre identifiant Telegram ne figure pas dans la liste autoris\u00e9e.",
     unsupported_type: "Ce type de message n'est pas pris en charge. Veuillez envoyer des fichiers, photos, vid\u00e9os, audio ou messages vocaux.\nTapez /help pour l'aide.",
     send_file_hint: 'Envoyez-moi un fichier pour le t\u00e9l\u00e9verser, ou tapez /help pour la liste des commandes.',
     confirm_expired: 'La confirmation a expir\u00e9. Veuillez r\u00e9essayer.',

@@ -392,6 +392,9 @@ deploy_cf() {
   if [ -n "${SSE_MASTER_KEY:-}" ]; then
     echo "$SSE_MASTER_KEY" | npx wrangler secret put SSE_MASTER_KEY 2>&1 || true
   fi
+  if [ -n "${TG_ADMIN_IDS:-}" ]; then
+    echo "$TG_ADMIN_IDS" | npx wrangler secret put TG_ADMIN_IDS 2>&1 || true
+  fi
   log "Secrets 配置完成"
 
   # 部署 Worker
