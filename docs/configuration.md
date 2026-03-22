@@ -53,7 +53,7 @@ API token permissions: Workers Scripts:Edit, D1:Edit, R2:Edit, Account Settings:
 2. Click "API development tools"
 3. Fill in the form to create a new application (these fields are just metadata and don't affect functionality):
    - **App title**: anything, e.g. `tg-s3`
-   - **Short name**: 5-32 alphanumeric characters, e.g. `tgs3`
+   - **Short name**: 5-32 alphanumeric characters, e.g. `tgs3s`
    - **URL**: leave blank
    - **Platform**: select `Other`
    - **Description**: leave blank

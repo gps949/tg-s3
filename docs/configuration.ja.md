@@ -53,7 +53,7 @@ API トークン権限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Sett
 2. 「API development tools」をクリック
 3. フォームに入力してアプリケーションを作成（以下のフィールドはメタデータのみで、機能には影響しません）：
    - **App title**：任意の名前、例：`tg-s3`
-   - **Short name**：5-32 文字の英数字、例：`tgs3`
+   - **Short name**：5-32 文字の英数字、例：`tgs3s`
    - **URL**：空欄
    - **Platform**：`Other` を選択
    - **Description**：空欄

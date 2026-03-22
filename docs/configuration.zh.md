@@ -53,7 +53,7 @@ API token 权限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Settings:R
 2. 点击 "API development tools"
 3. 填写表单创建新应用（以下字段仅为元数据，不影响功能）：
    - **App title**：随意填写，如 `tg-s3`
-   - **Short name**：5-32 个字母数字，如 `tgs3`
+   - **Short name**：5-32 个字母数字，如 `tgs3s`
    - **URL**：留空
    - **Platform**：选择 `Other`
    - **Description**：留空
