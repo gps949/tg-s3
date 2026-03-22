@@ -173,6 +173,21 @@ export async function handleCopyObject(s3: S3Request, env: Env, ctx: ExecutionCo
       tgMessageId = fwdRes.result.message_id;
       if (fwdRes.result.document) tgFileId = fwdRes.result.document.file_id;
     }
+  } else if (srcObj.size > 0 && !(srcBucket === s3.bucket && srcKey === s3.key)) {
+    // Same TG chat but different object: create new TG message reference for isolation.
+    // Without this, deleting the source would orphan the copy (shared tg_message_id).
+    const tg = new TelegramClient(env);
+    if (srcObj.tg_message_id === 0) {
+      const sendRes = await tg.sendDocumentByFileId(destBucket.tg_chat_id, srcObj.tg_file_id, destBucket.tg_topic_id);
+      tgChatId = destBucket.tg_chat_id;
+      tgMessageId = sendRes.result.message_id;
+      if (sendRes.result.document) tgFileId = sendRes.result.document.file_id;
+    } else {
+      const fwdRes = await tg.forwardMessage(srcObj.tg_chat_id, destBucket.tg_chat_id, srcObj.tg_message_id, destBucket.tg_topic_id);
+      tgChatId = destBucket.tg_chat_id;
+      tgMessageId = fwdRes.result.message_id;
+      if (fwdRes.result.document) tgFileId = fwdRes.result.document.file_id;
+    }
   } else if (srcObj.size === 0) {
     tgChatId = destBucket.tg_chat_id;
   }

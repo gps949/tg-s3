@@ -95,9 +95,11 @@ rclone ls tgs3:default
 | Category | Operations |
 |----------|-----------|
 | Objects | GetObject, PutObject, HeadObject, DeleteObject, DeleteObjects, CopyObject |
+| Tagging | GetObjectTagging, PutObjectTagging, DeleteObjectTagging |
 | Listing | ListObjectsV2, ListObjects (v1) |
 | Multipart | CreateMultipartUpload, UploadPart, UploadPartCopy, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads |
 | Buckets | ListBuckets, CreateBucket, DeleteBucket, HeadBucket, GetBucketLocation, GetBucketVersioning |
+| Lifecycle | GetBucketLifecycleConfiguration, PutBucketLifecycleConfiguration, DeleteBucketLifecycleConfiguration |
 | Auth | AWS SigV4 (multi-credential), Presigned URLs, Bearer token, Telegram initData |
 
 **Not supported (by design):** versioning, ACLs, cross-region replication. See [docs/S3-COMPAT.md](docs/S3-COMPAT.md) for details.
