@@ -66,7 +66,7 @@ export default {
     if (path.startsWith('/api/shares')) {
       const authResult = await authenticate(request, url, env);
       if (isAuthFailure(authResult)) return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
-      return addCorsHeaders(await handleShareApi(request, url, env));
+      return addCorsHeaders(await handleShareApi(request, url, env, authResult));
     }
 
     // Simple Upload API: Bearer token auth using S3 credentials (for iOS Shortcuts, scripts, etc.)

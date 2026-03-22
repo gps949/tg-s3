@@ -1,4 +1,4 @@
-import type { Env, S3Request, ObjectRow, ShareTokenRow } from '../types';
+import type { Env, S3Request, ObjectRow, ShareTokenRow, AuthContext } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { createShareToken, validateShareToken, validateShareTokenWithCookie } from '../sharing/tokens';
 import { renderSharePage, renderPasswordPage, renderExpiredPage } from '../sharing/pages';
@@ -29,7 +29,7 @@ function contentDisposition(disposition: 'inline' | 'attachment', filename: stri
 // DELETE /api/shares/:token - revoke share
 // PATCH /api/shares/:token - update share
 
-export async function handleShareApi(request: Request, url: URL, env: Env): Promise<Response> {
+export async function handleShareApi(request: Request, url: URL, env: Env, auth?: AuthContext): Promise<Response> {
   const path = url.pathname;
   const method = request.method;
 
@@ -38,6 +38,7 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
     let body: { bucket: string; key: string; expiresIn?: number; password?: string; maxDownloads?: number; note?: string };
     try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
     if (!body.bucket || !body.key) return Response.json({ error: 'bucket and key are required' }, { status: 400 });
+    if (auth && !hasBucketAccess(auth, body.bucket)) return Response.json({ error: 'Access denied for this bucket' }, { status: 403 });
     if (body.expiresIn !== undefined && body.expiresIn < 1) body.expiresIn = undefined;
     if (body.maxDownloads !== undefined && body.maxDownloads < 1) body.maxDownloads = undefined;
     const store = new MetadataStore(env);
@@ -51,8 +52,13 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
   if (method === 'GET' && path === '/api/shares') {
     const store = new MetadataStore(env);
     const bucket = url.searchParams.get('bucket') || undefined;
+    if (auth && bucket && !hasBucketAccess(auth, bucket)) return Response.json({ error: 'Access denied for this bucket' }, { status: 403 });
     const key = url.searchParams.get('key') || undefined;
-    const tokens = await store.listShareTokens(bucket, key);
+    let tokens = await store.listShareTokens(bucket, key);
+    // Filter results to only buckets the caller can access
+    if (auth && !auth.buckets.includes('*')) {
+      tokens = tokens.filter(t => hasBucketAccess(auth, t.bucket));
+    }
     return Response.json(tokens);
   }
 
@@ -65,10 +71,13 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
     if (method === 'GET') {
       const share = await store.getShareToken(token);
       if (!share) return Response.json({ error: 'Not found' }, { status: 404 });
+      if (auth && !hasBucketAccess(auth, share.bucket)) return Response.json({ error: 'Access denied' }, { status: 403 });
       return Response.json(share);
     }
 
     if (method === 'DELETE') {
+      const share = await store.getShareToken(token);
+      if (share && auth && !hasBucketAccess(auth, share.bucket)) return Response.json({ error: 'Access denied' }, { status: 403 });
       await store.deleteShareToken(token);
       return new Response(null, { status: 204 });
     }
@@ -76,6 +85,7 @@ export async function handleShareApi(request: Request, url: URL, env: Env): Prom
     if (method === 'PATCH') {
       const existing = await store.getShareToken(token);
       if (!existing) return Response.json({ error: 'Not found' }, { status: 404 });
+      if (auth && !hasBucketAccess(auth, existing.bucket)) return Response.json({ error: 'Access denied' }, { status: 403 });
       let body: Record<string, unknown>;
       try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
       const updates: Partial<Pick<ShareTokenRow, 'expires_at' | 'password_hash' | 'max_downloads' | 'note'>> = {};
@@ -348,4 +358,8 @@ async function serveLiveVideo(obj: ObjectRow, share: ShareTokenRow, store: Metad
     } catch { /* ignore */ }
   }
   return new Response('Not found', { status: 404 });
+}
+
+function hasBucketAccess(auth: AuthContext, bucket: string): boolean {
+  return auth.buckets.includes('*') || auth.buckets.includes(bucket);
 }

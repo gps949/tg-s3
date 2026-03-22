@@ -246,5 +246,7 @@ function escapeHtml(s: string): string {
 }
 
 function escapeJsString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  // Escape for JS string context AND HTML attribute context (onclick="..."),
+  // where " would close the attribute even with JS \" escaping.
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n').replace(/</g, '\\x3c');
 }
