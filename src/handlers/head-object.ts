@@ -84,6 +84,7 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
 
   if (!headers['Content-Disposition'] && isImageContentType(obj.content_type)) {
     headers['Content-Disposition'] = 'inline';
+    headers['Access-Control-Allow-Origin'] = '*';
   }
 
   // S3 returns x-amz-mp-parts-count for objects uploaded via multipart

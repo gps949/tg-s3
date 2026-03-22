@@ -76,7 +76,7 @@ export default {
       if ('error' in authResult) {
         return addCorsHeaders(Response.json({ error: authResult.error }, { status: authResult.status }));
       }
-      const bucket = url.searchParams.get('bucket');
+      const bucket = url.searchParams.get('bucket')?.toLowerCase();
       const key = url.searchParams.get('key');
       if (!bucket || !key) return addCorsHeaders(Response.json({ error: 'bucket and key required' }, { status: 400 }));
       // Check credential has access to this bucket

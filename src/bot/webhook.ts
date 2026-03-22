@@ -111,15 +111,16 @@ async function handleCallbackQuery(
   const data = cq.data || '';
   const chatId = cq.message?.chat.id.toString();
   const messageId = cq.message?.message_id;
-  if (!chatId || !messageId) return;
-  const lang = detectBotLang(cq.from.language_code);
 
-  // Acknowledge callback immediately
+  // Always acknowledge callback to dismiss Telegram loading indicator
   await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/answerCallbackQuery`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: cq.id }),
   });
+
+  if (!chatId || !messageId) return;
+  const lang = detectBotLang(cq.from.language_code);
 
   if (data.startsWith('del_yes:')) {
     // Resolve short ID → {bucket, key} from in-memory pending map
