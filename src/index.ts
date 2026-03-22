@@ -109,7 +109,7 @@ export default {
       const authResult = await authenticate(authReq, url, env);
       if (isAuthFailure(authResult)) return addCorsHeaders(errorResponse(authResult.status, authResult.code, authResult.message));
       try {
-        return addCorsHeaders(await handleMiniAppApi(request, url, env, ctx));
+        return addCorsHeaders(await handleMiniAppApi(request, url, env, ctx, authResult));
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Internal error';
         return addCorsHeaders(Response.json({ error: msg }, { status: 500 }));
@@ -568,6 +568,8 @@ async function handlePutObjectTagging(s3: S3Request, env: Env): Promise<Response
 
 async function handleDeleteObjectTagging(s3: S3Request, env: Env): Promise<Response> {
   const store = new MetadataStore(env);
+  const obj = await store.getObject(s3.bucket, s3.key);
+  if (!obj) return errorResponse(404, 'NoSuchKey', 'The specified key does not exist.', `/${s3.bucket}/${s3.key}`);
   await store.deleteObjectTags(s3.bucket, s3.key);
   return new Response(null, { status: 204 });
 }
@@ -717,7 +719,12 @@ async function handlePresignApi(request: Request, url: URL, env: Env, auth: Auth
   return Response.json({ url: presignedUrl });
 }
 
-async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function handleMiniAppApi(request: Request, url: URL, env: Env, ctx: ExecutionContext, auth: AuthContext): Promise<Response> {
+  // Mini App API is admin-only; reject non-admin credentials that may have
+  // authenticated via SigV4 (normal Mini App auth uses Bearer → ADMIN_CONTEXT)
+  if (auth.permission !== 'admin') {
+    return Response.json({ error: 'Mini App API requires admin credentials' }, { status: 403 });
+  }
   const path = url.pathname;
   const method = request.method;
   const store = new MetadataStore(env);
