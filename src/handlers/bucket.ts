@@ -16,13 +16,15 @@ export async function handleCreateBucket(s3: S3Request, env: Env): Promise<Respo
   // S3: CreateBucket is idempotent — returns 200 if bucket already exists and is owned by caller
   if (existing) return new Response(null, { status: 200, headers: { 'Location': `/${s3.bucket}` } });
 
-  // Validate bucket name (S3 naming rules)
+  // Validate bucket name (S3 naming rules + reserved names that conflict with internal routes)
+  const RESERVED_BUCKETS = new Set(['share', 'api', 'bot', 'miniapp']);
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(s3.bucket)
     || /\.\./.test(s3.bucket)       // no consecutive periods
     || /\.-|-\./.test(s3.bucket)    // no period adjacent to hyphen
     || /^\d+\.\d+\.\d+\.\d+$/.test(s3.bucket)  // must not be IP address format
     || s3.bucket.startsWith('xn--')             // reserved: IDN labels
     || s3.bucket.endsWith('-s3alias') || s3.bucket.endsWith('--ol-s3')  // reserved suffixes
+    || RESERVED_BUCKETS.has(s3.bucket)          // reserved: conflicts with internal routes
   ) {
     return errorResponse(400, 'InvalidBucketName', 'The specified bucket is not valid.');
   }
