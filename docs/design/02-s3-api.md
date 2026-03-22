@@ -71,17 +71,27 @@ PUT /{bucket}/{key}
 Headers:
   Content-Type: application/octet-stream (或实际类型)
   Content-Length: 12345
+  Content-MD5: base64 (可选, 完整性校验)
   x-amz-meta-*: 自定义元数据
+  x-amz-tagging: key1=val1&key2=val2 (可选, 最多 10 个标签, key<=128 chars, value<=256 chars)
+  x-amz-server-side-encryption-customer-algorithm: AES256 (SSE-C)
+  x-amz-server-side-encryption: AES256 (SSE-S3, 需配置 SSE_MASTER_KEY)
 Body: 文件内容
 ```
+
+大小路由：
+- 分块传输编码 (chunked): Worker 内存缓冲, 上限 100MB (WORKER_BODY_LIMIT)
+- <=20MB: Worker 内存缓冲, 通过 Bot API 上传
+- 20MB-2GB: 流式转发到 VPS, VPS 计算 ETag 并上传到 TG Local Bot API
 
 处理流程：
 1. 验证认证
 2. 检查速率限制
-3. 读取 Content-Type, Content-Length, x-amz-meta-* headers
-4. 支持条件写入: `If-None-Match: *` 阻止覆盖已有对象，返回 412 PreconditionFailed
-5. 计算请求体 MD5 作为 ETag
-6. 判断大小路由到 TG Bot API 或 VPS
+3. 读取 Content-Type, Content-Length, x-amz-meta-*, x-amz-tagging headers
+4. 验证标签: 最多 10 个, key<=128, value<=256
+5. 支持条件写入: `If-None-Match: *` 阻止覆盖已有对象，返回 412 PreconditionFailed
+6. 计算请求体 MD5 作为 ETag (大文件由 VPS 计算)
+7. 判断大小路由到 TG Bot API 或 VPS
 7. 调用 TG sendDocument:
    ```
    POST https://api.telegram.org/bot{token}/sendDocument
@@ -221,6 +231,9 @@ GET /{bucket}?list-type=2&prefix=photos/&delimiter=/&max-keys=1000&continuation-
 PUT /{dest-bucket}/{dest-key}
 Headers:
   x-amz-copy-source: /{src-bucket}/{src-key}
+  x-amz-metadata-directive: COPY | REPLACE (默认 COPY)
+  x-amz-tagging-directive: COPY | REPLACE (默认 COPY)
+  x-amz-tagging: key1=val1&key2=val2 (仅 tagging-directive=REPLACE 时使用)
 ```
 
 处理流程：
@@ -228,6 +241,7 @@ Headers:
 2. 自身复制保护: 同 bucket 同 key + COPY directive → 返回 400 InvalidRequest（AWS S3 标准行为，不允许不修改元数据的自身复制）
 3. 查 D1 获取源对象元数据，支持条件 copy headers（if-match/if-none-match/if-modified-since/if-unmodified-since）
 4. 检查 `x-amz-metadata-directive`: COPY（默认，保留源元数据）或 REPLACE（使用请求中的新元数据）
+5. 检查 `x-amz-tagging-directive`: COPY（默认，复制源对象标签）或 REPLACE（使用 `x-amz-tagging` header 中的新标签）
 5. 同 bucket: 复用同一个 file_id，仅 INSERT D1 记录
    - 特殊情况: 0 字节对象 (`__zero__` sentinel) 的 tg_chat_id 指向目标 bucket 的 chat_id
 6. 跨 bucket: 调用 TG `forwardMessage`（含 `message_thread_id`）转发消息到目标频道/话题（受速率限制），获取新的 file_id + message_id

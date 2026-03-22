@@ -66,15 +66,17 @@
 职责：
 - 接收并解析 S3 HTTP 请求（路径、headers、query params）
 - 认证：验证 SigV4 签名、Bearer Token、TG WebApp initData 或 Presigned URL
+- 凭证缓存：模块级 Map 缓存（60s TTL, 上限 200 条），含负缓存（不存在的 key 也缓存）防止 D1 读放大
 - 路由：根据操作类型分发到对应 handler
 - 小文件（<=20MB）：直接调用 TG Bot API 存取（上传限制与下载对齐，确保上传的文件可下载）
 - 大文件/媒体处理：转发请求到 VPS
+- 分块传输编码：Worker 内存缓冲，上限 100MB (WORKER_BODY_LIMIT)，解析后校验 decoded-content-length
 - 查询/更新 D1 元数据
 - 速率限制：令牌桶算法，确保不超 TG API 限制
 - 响应格式化：输出 S3 标准 XML
-- 分享验证：校验 Token 时效/口令
+- 分享验证：校验 Token 时效/口令，下载计数原子递增（先计数后下载，失败回退）
 - 三层缓存管理：CDN Cache + R2 持久缓存 + TG 源站
-- Cron 定时任务：清理过期分享、孤儿分享、过期 multipart、D1-TG 一致性检查、R2 缓存清理、生命周期过期
+- Cron 定时任务：清理过期分享、孤儿分享、过期 multipart、D1-TG 一致性检查、R2 缓存清理、过期密码尝试、孤儿分块、生命周期过期
 
 ### CF D1: 元数据数据库
 
