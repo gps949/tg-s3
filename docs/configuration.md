@@ -108,8 +108,9 @@ The scheduled handler runs every 6 hours and performs:
 3. Clean stale multipart uploads (>24 hours)
 4. Clean orphaned chunks
 5. Clean expired password attempt records
-6. Consistency check (sample 50 objects, verify Telegram file access)
+6. Consistency check (dynamic sample ~2% of objects clamped to [5, 50], verify Telegram file access)
 7. R2 cache cleanup (evict objects deleted from D1)
+8. Lifecycle rules (delete expired objects matching bucket lifecycle configuration)
 
 ## Security Notes
 

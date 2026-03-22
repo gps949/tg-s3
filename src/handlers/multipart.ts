@@ -173,7 +173,6 @@ export async function handleUploadPart(s3: S3Request, env: Env, ctx: ExecutionCo
   }
 
   const partHeaders: Record<string, string> = { 'ETag': etag };
-  if (contentMd5) partHeaders['Content-MD5'] = contentMd5;
   if (uploadSseMd5) {
     partHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
     partHeaders['x-amz-server-side-encryption-customer-key-MD5'] = uploadSseMd5;

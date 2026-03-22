@@ -108,8 +108,9 @@ Le gestionnaire planifié s'exécute toutes les 6 heures et effectue :
 3. Nettoyage des uploads multipart obsolètes (plus de 24 heures)
 4. Nettoyage des chunks orphelins
 5. Nettoyage des enregistrements de tentatives de mot de passe expirés
-6. Vérification de cohérence (échantillon de 50 objets, vérification de l'accès aux fichiers Telegram)
+6. Vérification de cohérence (échantillonnage dynamique ~2% des objets, limité à [5, 50], vérification de l'accès aux fichiers Telegram)
 7. Nettoyage du cache R2 (éviction des objets supprimés de D1)
+8. Règles de cycle de vie (suppression des objets expirés selon la configuration de cycle de vie du bucket)
 
 ## Notes de sécurité
 

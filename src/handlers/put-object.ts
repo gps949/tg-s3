@@ -51,6 +51,15 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
     sysMeta = addSseS3Metadata(sysMeta || {});
   }
 
+  // Validate x-amz-tagging before upload (S3 rejects >10 tags upfront)
+  const taggingHeaderRaw = s3.headers.get('x-amz-tagging');
+  if (taggingHeaderRaw) {
+    const tagCount = taggingHeaderRaw.split('&').filter(p => p.includes('=')).length;
+    if (tagCount > 10) {
+      return errorResponse(400, 'InvalidTag', 'Object tags cannot be greater than 10.');
+    }
+  }
+
   // S3 conditional write (2024-08): If-None-Match: * prevents overwriting existing objects
   const ifNoneMatch = s3.headers.get('if-none-match');
   if (ifNoneMatch && ifNoneMatch.trim() === '*') {

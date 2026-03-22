@@ -667,7 +667,6 @@ deploy_docker() {
     log "processor + tunnel 已启动"
     warn "未启用 Local Bot API, 文件大小限制 20MB"
   elif [ "$HAS_LOCAL_API" -eq 1 ]; then
-    docker compose --profile localapi up -d
     warn "未配置 Cloudflare Tunnel (缺少 CF_CUSTOM_DOMAIN 或 API Token 权限不足)"
     warn "processor + telegram-bot-api 已启动但外部无法访问"
   else

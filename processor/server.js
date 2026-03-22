@@ -99,7 +99,7 @@ app.post('/api/proxy/get', async (req, res) => {
     };
     await pump();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
@@ -166,7 +166,7 @@ app.post('/api/proxy/range', async (req, res) => {
       res.write(Buffer.from(value));
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
