@@ -133,16 +133,18 @@ export class VpsClient {
 
   async proxyPut(data: ArrayBuffer, chatId: string, filename: string, contentType: string, messageThreadId?: number | null): Promise<Response> {
     return this.withRetry(async () => {
-      const form = new FormData();
-      form.append('chat_id', chatId);
-      form.append('filename', filename);
-      form.append('content_type', contentType);
-      form.append('file', new Blob([data], { type: contentType }), filename);
-      if (messageThreadId) form.append('message_thread_id', messageThreadId.toString());
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${this.secret}`,
+        'Content-Type': contentType,
+        'X-Chat-Id': chatId,
+        'X-Filename': filename,
+        'X-Content-Type': contentType,
+      };
+      if (messageThreadId) headers['X-Message-Thread-Id'] = messageThreadId.toString();
       const res = await fetch(`${this.baseUrl}/api/proxy/put`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${this.secret}` },
-        body: form,
+        headers,
+        body: data,
         signal: AbortSignal.timeout(VPS_PROXY_TIMEOUT),
       });
       if (!res.ok) {
