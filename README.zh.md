@@ -10,7 +10,7 @@ TG-S3 将 Telegram 变成 S3 兼容的对象存储后端。文件作为 Telegram
 
 ## 功能特性
 
-- **S3 兼容 API** -- 支持 21 种操作，包括分片上传、预签名 URL 和条件请求
+- **S3 兼容 API** -- 支持 27 种操作，包括分片上传、预签名 URL 和条件请求
 - **无限免费存储** -- Telegram 提供免费的存储层
 - **三级缓存** -- CF CDN (L1) -> R2 (L2) -> Telegram (L3)，加速读取
 - **Telegram Bot** -- 直接在 Telegram 中管理文件、存储桶和分享
@@ -89,7 +89,7 @@ rclone ls tgs3:default
 
 ## S3 兼容性
 
-支持 21 种操作，涵盖对象 CRUD、分片上传、存储桶管理和认证。
+支持 27 种操作，涵盖对象 CRUD、分片上传、存储桶管理和认证。
 
 | 分类 | 操作 |
 |------|------|
@@ -99,7 +99,7 @@ rclone ls tgs3:default
 | 存储桶 | ListBuckets, CreateBucket, DeleteBucket, HeadBucket, GetBucketLocation, GetBucketVersioning |
 | 认证 | AWS SigV4、预签名 URL、Bearer Token |
 
-**不支持（设计决策）：** 版本控制、服务端加密、生命周期策略、ACL、跨区域复制。详见 [docs/S3-COMPAT.md](docs/S3-COMPAT.md)。
+**不支持（设计决策）：** 版本控制、ACL、跨区域复制。详见 [docs/S3-COMPAT.md](docs/S3-COMPAT.md)。
 
 ## Telegram Bot 命令
 

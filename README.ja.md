@@ -10,7 +10,7 @@ TG-S3 は Telegram を S3 互換オブジェクトストレージバックエン
 
 ## 機能
 
-- **S3 互換 API** -- マルチパートアップロード、署名付き URL、条件付きリクエストを含む 21 のオペレーションをサポート
+- **S3 互換 API** -- マルチパートアップロード、署名付き URL、条件付きリクエストを含む 27 のオペレーションをサポート
 - **無制限の無料ストレージ** -- Telegram がストレージレイヤーを無料で提供
 - **三層キャッシュ** -- CF CDN (L1) -> R2 (L2) -> Telegram (L3) による高速読み取り
 - **Telegram Bot** -- Telegram から直接ファイル、バケット、共有を管理
@@ -105,7 +105,7 @@ rclone ls tgs3:default
 
 ## S3 互換性
 
-オブジェクト CRUD、マルチパートアップロード、バケット管理、認証の 21 オペレーションをサポート。
+オブジェクト CRUD、マルチパートアップロード、バケット管理、認証の 27 オペレーションをサポート。
 
 | カテゴリ | オペレーション |
 |----------|---------------|
@@ -115,7 +115,7 @@ rclone ls tgs3:default
 | バケット | ListBuckets, CreateBucket, DeleteBucket, HeadBucket, GetBucketLocation, GetBucketVersioning |
 | 認証 | AWS SigV4、署名付き URL、Bearer トークン |
 
-**非対応（設計上の判断）：** バージョニング、サーバーサイド暗号化、ライフサイクルポリシー、ACL、クロスリージョンレプリケーション。詳細は [docs/S3-COMPAT.md](docs/S3-COMPAT.md) を参照。
+**非対応（設計上の判断）：** バージョニング、ACL、クロスリージョンレプリケーション。詳細は [docs/S3-COMPAT.md](docs/S3-COMPAT.md) を参照。
 
 ## Telegram Bot コマンド
 

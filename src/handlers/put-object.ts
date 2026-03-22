@@ -170,7 +170,7 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
         if (optCfg.enabled) {
           ctx.waitUntil(generateOptimizedVariant(bucket, s3.bucket, s3.key, result.tgFileId, contentType, optCfg, env));
         }
-      } catch { /* invalid config, skip */ }
+      } catch (e) { console.warn(`Invalid optimize_config for bucket ${s3.bucket}:`, e); }
     }
   }
 

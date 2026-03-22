@@ -18,6 +18,7 @@
 | 变量 | 说明 | 生成方式 |
 |------|------|----------|
 | `VPS_SECRET` | Worker 与 processor 之间的认证密钥 | `deploy.sh`（随机 48 字符） |
+| `SSE_MASTER_KEY` | SSE-S3 服务端加密的 Base64 密钥。deploy.sh 自动生成。 | `deploy.sh` |
 | S3 凭据 | S3 API 认证用的 access key + secret key | `deploy.sh`（在 D1 `credentials` 表中创建） |
 | Webhook 密钥 | Telegram webhook 验证密钥 | 由 `TG_BOT_TOKEN` 通过 HMAC-SHA256 派生 |
 
