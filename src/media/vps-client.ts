@@ -131,6 +131,45 @@ export class VpsClient {
     });
   }
 
+  /** Stream a large file directly to VPS for upload to TG (no Worker memory buffering). */
+  async proxyPutFull(
+    body: ReadableStream<Uint8Array>,
+    chatId: string, filename: string, contentType: string,
+    contentLength: number,
+    options?: {
+      messageThreadId?: number | null;
+      sseKeyBase64?: string;
+      sseS3KeyBase64?: string;
+      contentMd5?: string;
+    },
+  ): Promise<Response> {
+    // No retry: body stream can only be consumed once
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.secret}`,
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': contentLength.toString(),
+      'X-Chat-Id': chatId,
+      'X-Filename': filename,
+      'X-Content-Type': contentType,
+    };
+    if (options?.messageThreadId) headers['X-Message-Thread-Id'] = options.messageThreadId.toString();
+    if (options?.sseKeyBase64) headers['X-SSE-Key'] = options.sseKeyBase64;
+    if (options?.sseS3KeyBase64) headers['X-SSE-S3-Key'] = options.sseS3KeyBase64;
+    if (options?.contentMd5) headers['X-Content-MD5'] = options.contentMd5;
+
+    const res = await fetch(`${this.baseUrl}/api/proxy/put-full`, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(VPS_LONG_TIMEOUT),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`VPS proxy put-full failed (${res.status}): ${text}`);
+    }
+    return res;
+  }
+
   /** Download and decrypt an encrypted file on the VPS side (streaming, no Worker memory buffering). */
   async proxyGetDecrypt(fileId: string, keyBase64: string, rangeStart?: number, rangeEnd?: number): Promise<Response> {
     return this.withRetry(async () => {

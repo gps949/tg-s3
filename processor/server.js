@@ -1,9 +1,8 @@
 import express from 'express';
 import { createReadStream, createWriteStream, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { readFile, writeFile, unlink, stat, open as openFile } from 'fs/promises';
-import { createDecipheriv } from 'crypto';
+import { createDecipheriv, createCipheriv, randomUUID, randomBytes, createHash } from 'crypto';
 import { join } from 'path';
-import { randomUUID } from 'crypto';
 import { pipeline } from 'stream/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -169,6 +168,126 @@ app.post('/api/proxy/range', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Large file upload: stream body to disk, compute ETag, optionally encrypt, upload to TG
+// Worker streams the request body directly here without buffering, enabling PutObject up to 2GB.
+app.post('/api/proxy/put-full', async (req, res) => {
+  const rawPath = join(TEMP_DIR, `putraw-${randomUUID()}`);
+  const encPath = join(TEMP_DIR, `putenc-${randomUUID()}`);
+  try {
+    const chatId = req.headers['x-chat-id'];
+    const filename = req.headers['x-filename'] || 'file';
+    const contentType = req.headers['x-content-type'] || 'application/octet-stream';
+    const messageThreadId = req.headers['x-message-thread-id'];
+    const sseKey = req.headers['x-sse-key']; // SSE-C key (base64)
+    const sseS3Key = req.headers['x-sse-s3-key']; // SSE-S3 master key (base64)
+    const expectedMd5 = req.headers['x-content-md5'];
+
+    if (!chatId) return res.status(400).json({ error: 'Missing X-Chat-Id' });
+
+    // 1. Stream body to temp file, computing MD5 hash simultaneously
+    const ws = createWriteStream(rawPath);
+    const hash = createHash('md5');
+    let size = 0;
+
+    await new Promise((resolve, reject) => {
+      req.on('data', chunk => {
+        ws.write(chunk);
+        hash.update(chunk);
+        size += chunk.length;
+      });
+      req.on('end', () => ws.end(resolve));
+      req.on('error', reject);
+      ws.on('error', reject);
+    });
+
+    const digestBuf = hash.digest();
+    const md5Hex = digestBuf.toString('hex');
+    const md5Base64 = digestBuf.toString('base64');
+    const etag = `"${md5Hex}"`;
+
+    // 2. Validate Content-MD5 if provided
+    if (expectedMd5 && md5Base64 !== expectedMd5) {
+      return res.status(400).json({ error: 'Content-MD5 mismatch' });
+    }
+
+    // 3. Optionally encrypt (stream to another temp file)
+    let uploadPath = rawPath;
+    const encryptKey = sseKey || sseS3Key;
+    if (encryptKey && size > 0) {
+      await streamEncryptFile(rawPath, encPath, encryptKey);
+      uploadPath = encPath;
+    }
+
+    // 4. Upload to TG via sendDocument
+    let fileBlob;
+    try {
+      const { openAsBlob } = await import('node:fs');
+      fileBlob = await openAsBlob(uploadPath, { type: contentType });
+    } catch {
+      const fileBuffer = await readFile(uploadPath);
+      fileBlob = new Blob([fileBuffer], { type: contentType });
+    }
+
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    form.append('document', fileBlob, filename);
+    if (messageThreadId) form.append('message_thread_id', messageThreadId);
+
+    const tgRes = await fetch(`${TG_API}/bot${BOT_TOKEN}/sendDocument`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(TIMEOUT_TRANSFER),
+    });
+
+    if (!tgRes.ok) {
+      const text = await tgRes.text();
+      return res.status(502).json({ error: `TG upload failed: ${text}` });
+    }
+
+    const data = await tgRes.json();
+    const doc = data.result.document;
+
+    res.json({
+      etag,
+      tgChatId: chatId,
+      tgMessageId: data.result.message_id,
+      tgFileId: doc.file_id,
+      tgFileUniqueId: doc.file_unique_id,
+      size,
+    });
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    try { unlinkSync(rawPath); } catch {}
+    try { unlinkSync(encPath); } catch {}
+  }
+});
+
+// Stream-encrypt a file: output format = [12-byte IV][ciphertext][16-byte GCM auth tag]
+// Compatible with Web Crypto AES-GCM used by Worker's sse.ts
+async function streamEncryptFile(inputPath, outputPath, keyBase64) {
+  const iv = randomBytes(12);
+  const keyBuf = Buffer.from(keyBase64, 'base64');
+  const cipher = createCipheriv('aes-256-gcm', keyBuf, iv);
+
+  const rs = createReadStream(inputPath);
+  const ws = createWriteStream(outputPath);
+
+  ws.write(iv); // IV header
+
+  await new Promise((resolve, reject) => {
+    rs.pipe(cipher);
+    cipher.on('data', chunk => ws.write(chunk));
+    cipher.on('end', () => {
+      ws.write(cipher.getAuthTag()); // 16-byte auth tag
+      ws.end(resolve);
+    });
+    cipher.on('error', reject);
+    rs.on('error', reject);
+    ws.on('error', reject);
+  });
+}
 
 // Download, decrypt, and stream back (for encrypted files >20MB that Worker can't buffer)
 // Uses temp files + streaming decryption to avoid holding entire file in memory.

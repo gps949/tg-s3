@@ -1,4 +1,4 @@
-import type { Env, S3Request, ObjectRow, OptimizeConfig } from '../types';
+import type { Env, S3Request, ObjectRow, OptimizeConfig, BucketRow } from '../types';
 import { MetadataStore } from '../storage/metadata';
 import { uploadToTelegram, RateLimitError, FileTooLargeError } from '../telegram/upload';
 import { TelegramClient } from '../telegram/client';
@@ -8,6 +8,8 @@ import { errorResponse } from '../xml/builder';
 import { purgeCdnCache, purgeR2Cache } from './get-object';
 import { deleteDerivatives, deleteChunks } from './delete-object';
 import { parseSseCHeaders, validateKeyMd5, encrypt, addSseMetadata, SseCError, encryptS3, addSseS3Metadata } from '../utils/sse';
+import { BOT_API_GETFILE_LIMIT, VPS_SINGLE_FILE_MAX } from '../constants';
+import { VpsClient } from '../media/vps-client';
 
 export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const store = new MetadataStore(env);
@@ -15,30 +17,7 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
   const bucket = await store.getBucket(s3.bucket);
   if (!bucket) return errorResponse(404, 'NoSuchBucket', 'The specified bucket does not exist.', s3.bucket);
 
-  // S3 allows 0-byte objects (directory markers, metadata-only)
-  const body = await readBody(s3) ?? new ArrayBuffer(0);
-
-  // Validate Content-MD5 if provided
-  const contentMd5 = s3.headers.get('content-md5');
-  if (contentMd5) {
-    const digest = await crypto.subtle.digest('MD5', body);
-    const actualMd5 = btoa(String.fromCharCode(...new Uint8Array(digest)));
-    if (actualMd5 !== contentMd5) {
-      return errorResponse(400, 'BadDigest', 'The Content-MD5 you specified did not match what we received.');
-    }
-  }
-
-  // Validate x-amz-content-sha256 if a real hash is provided (not UNSIGNED-PAYLOAD or STREAMING-*)
-  const contentSha256 = s3.headers.get('x-amz-content-sha256');
-  if (contentSha256 && contentSha256 !== 'UNSIGNED-PAYLOAD' && !contentSha256.startsWith('STREAMING-')) {
-    const actualSha256 = await sha256Hex(body);
-    if (actualSha256 !== contentSha256) {
-      return errorResponse(400, 'XAmzContentSHA256Mismatch',
-        'The provided \'x-amz-content-sha256\' header does not match what was computed.');
-    }
-  }
-
-  // SSE-C: parse and validate encryption headers
+  // SSE-C: parse and validate encryption headers (before reading body)
   let sseParams: ReturnType<typeof parseSseCHeaders> = null;
   try {
     sseParams = parseSseCHeaders(s3.headers);
@@ -51,8 +30,6 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
   const contentType = s3.headers.get('content-type') || 'application/octet-stream';
   const userMeta = extractUserMetadata(s3.headers);
   let sysMeta = extractSystemMetadata(s3.headers);
-  // ETag is always MD5 of plaintext (before encryption)
-  const etag = await computeEtag(body);
 
   // Merge SSE metadata into system metadata
   if (sseParams) {
@@ -60,7 +37,6 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
   }
 
   // SSE-S3: determine if server-side encryption should be applied
-  // Triggered by: x-amz-server-side-encryption: AES256 header, or bucket default_encryption
   const sseS3Header = s3.headers.get('x-amz-server-side-encryption');
   const useSseS3 = !sseParams && env.SSE_MASTER_KEY && (
     sseS3Header === 'AES256' || !!bucket.default_encryption
@@ -86,6 +62,48 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
 
   // Save old object info BEFORE overwriting (for cleanup)
   const oldObj = ifNoneMatch?.trim() === '*' ? null : await store.getObject(s3.bucket, s3.key);
+
+  // Large file: stream body directly to VPS (no Worker memory buffering)
+  const contentLength = parseInt(s3.headers.get('content-length') || '0', 10);
+  const decodedLength = parseInt(s3.headers.get('x-amz-decoded-content-length') || '0', 10);
+  const estimatedSize = decodedLength || contentLength;
+  const isChunked = (s3.headers.get('x-amz-content-sha256') || '').startsWith('STREAMING-');
+
+  if (estimatedSize > BOT_API_GETFILE_LIMIT && env.VPS_URL && !isChunked && s3.body) {
+    if (estimatedSize > VPS_SINGLE_FILE_MAX) {
+      return errorResponse(400, 'EntityTooLarge', `File size exceeds maximum 2GB limit.`);
+    }
+    return handleLargePutViaVps(
+      s3, env, ctx, store, bucket, oldObj,
+      contentType, userMeta, sysMeta, sseParams, !!useSseS3,
+    );
+  }
+
+  // Small file path: buffer body in Worker memory
+  const body = await readBody(s3) ?? new ArrayBuffer(0);
+
+  // Validate Content-MD5 if provided
+  const contentMd5 = s3.headers.get('content-md5');
+  if (contentMd5) {
+    const digest = await crypto.subtle.digest('MD5', body);
+    const actualMd5 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    if (actualMd5 !== contentMd5) {
+      return errorResponse(400, 'BadDigest', 'The Content-MD5 you specified did not match what we received.');
+    }
+  }
+
+  // Validate x-amz-content-sha256 if a real hash is provided (not UNSIGNED-PAYLOAD or STREAMING-*)
+  const contentSha256 = s3.headers.get('x-amz-content-sha256');
+  if (contentSha256 && contentSha256 !== 'UNSIGNED-PAYLOAD' && !contentSha256.startsWith('STREAMING-')) {
+    const actualSha256 = await sha256Hex(body);
+    if (actualSha256 !== contentSha256) {
+      return errorResponse(400, 'XAmzContentSHA256Mismatch',
+        'The provided \'x-amz-content-sha256\' header does not match what was computed.');
+    }
+  }
+
+  // ETag is always MD5 of plaintext (before encryption)
+  const etag = await computeEtag(body);
 
   // 0-byte objects: store metadata only, Telegram rejects empty documents
   if (body.byteLength === 0) {
@@ -175,6 +193,89 @@ export async function handlePutObject(s3: S3Request, env: Env, ctx: ExecutionCon
   }
 
   const putHeaders: Record<string, string> = { 'ETag': etag };
+  if (contentMd5) putHeaders['Content-MD5'] = contentMd5;
+  if (sseParams) {
+    putHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
+    putHeaders['x-amz-server-side-encryption-customer-key-MD5'] = sseParams.keyMd5;
+  }
+  if (useSseS3) putHeaders['x-amz-server-side-encryption'] = 'AES256';
+  return new Response(null, { status: 200, headers: putHeaders });
+}
+
+/** Large file upload: stream body to VPS, VPS handles ETag + encryption + TG upload. */
+async function handleLargePutViaVps(
+  s3: S3Request, env: Env, ctx: ExecutionContext,
+  store: MetadataStore, bucket: BucketRow, oldObj: ObjectRow | null,
+  contentType: string, userMeta: Record<string, string>,
+  sysMeta: Record<string, string> | undefined,
+  sseParams: ReturnType<typeof parseSseCHeaders>, useSseS3: boolean,
+): Promise<Response> {
+  const vps = new VpsClient(env);
+  const contentLength = parseInt(s3.headers.get('content-length') || s3.headers.get('x-amz-decoded-content-length') || '0', 10);
+
+  let sseKeyBase64: string | undefined;
+  let sseS3KeyBase64: string | undefined;
+  if (sseParams) sseKeyBase64 = sseParams.keyBase64;
+  else if (useSseS3) sseS3KeyBase64 = env.SSE_MASTER_KEY!;
+
+  const contentMd5 = s3.headers.get('content-md5') || undefined;
+
+  const vpsRes = await vps.proxyPutFull(
+    s3.body!,
+    bucket.tg_chat_id, s3.key, contentType, contentLength,
+    {
+      messageThreadId: bucket.tg_topic_id,
+      sseKeyBase64,
+      sseS3KeyBase64,
+      contentMd5,
+    },
+  );
+
+  const result = await vpsRes.json() as {
+    etag: string; tgChatId: string; tgMessageId: number;
+    tgFileId: string; tgFileUniqueId: string; size: number;
+  };
+
+  // Save metadata: size is plaintext size (from VPS, before encryption)
+  await store.putObject({
+    bucket: s3.bucket, key: s3.key, size: result.size, etag: result.etag, contentType,
+    tgChatId: result.tgChatId, tgMessageId: result.tgMessageId,
+    tgFileId: result.tgFileId, tgFileUniqueId: result.tgFileUniqueId,
+    userMetadata: Object.keys(userMeta).length > 0 ? userMeta : undefined,
+    systemMetadata: sysMeta,
+  }, oldObj);
+
+  // Tagging
+  const taggingHeader = s3.headers.get('x-amz-tagging');
+  if (taggingHeader) {
+    const tags = taggingHeader.split('&').map(pair => {
+      const [k, v] = pair.split('=');
+      return { key: decodeURIComponent(k || ''), value: decodeURIComponent(v || '') };
+    }).filter(t => t.key);
+    if (tags.length > 0 && tags.length <= 10) {
+      ctx.waitUntil(store.putObjectTags(s3.bucket, s3.key, tags).catch(() => {}));
+    }
+  }
+
+  // Async cleanup & cache purge
+  if (oldObj) ctx.waitUntil(cleanupOldObject(s3.bucket, s3.key, oldObj, env));
+  ctx.waitUntil(purgeCdnCache(s3.url.origin, s3.bucket, s3.key));
+  ctx.waitUntil(purgeR2Cache(env, s3.bucket, s3.key));
+
+  // Auto-trigger media processing
+  if (env.VPS_URL) {
+    ctx.waitUntil(triggerMediaProcessing(s3.bucket, s3.key, result.tgFileId, contentType, env));
+    if (bucket.optimize_config) {
+      try {
+        const optCfg: OptimizeConfig = JSON.parse(bucket.optimize_config);
+        if (optCfg.enabled) {
+          ctx.waitUntil(generateOptimizedVariant(bucket, s3.bucket, s3.key, result.tgFileId, contentType, optCfg, env));
+        }
+      } catch { /* ignore invalid config */ }
+    }
+  }
+
+  const putHeaders: Record<string, string> = { 'ETag': result.etag };
   if (contentMd5) putHeaders['Content-MD5'] = contentMd5;
   if (sseParams) {
     putHeaders['x-amz-server-side-encryption-customer-algorithm'] = 'AES256';
