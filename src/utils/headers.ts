@@ -55,6 +55,9 @@ export function formatAmzDateShort(d: Date): string {
   return formatAmzDate(d).slice(0, 8);
 }
 
+import type { ObjectRow } from '../types';
+import { CACHE_CONTROL_IMMUTABLE, CACHE_CONTROL_DEFAULT } from '../constants';
+
 export function isImageContentType(ct: string): boolean {
   return ct.startsWith('image/');
 }
@@ -78,4 +81,76 @@ export function etagMatches(header: string, etag: string, strong = false): boole
     if (strong && trimmed.startsWith('W/')) return false;
     return stripEtagQuotes(trimmed) === stripped;
   });
+}
+
+// S3 system metadata: maps stored metadata key → HTTP header name → response-* override query param
+export const SYS_META_HEADERS: Array<[string, string, string]> = [
+  ['content-disposition', 'Content-Disposition', 'response-content-disposition'],
+  ['content-encoding', 'Content-Encoding', 'response-content-encoding'],
+  ['content-language', 'Content-Language', 'response-content-language'],
+  ['cache-control', 'Cache-Control', 'response-cache-control'],
+  ['expires', 'Expires', 'response-expires'],
+];
+
+// Build standard S3 response headers for GetObject / HeadObject
+export function buildResponseHeaders(obj: ObjectRow, query?: URLSearchParams): Record<string, string> {
+  const h: Record<string, string> = {
+    'ETag': obj.etag,
+    'Content-Type': query?.get('response-content-type') || obj.content_type,
+    'Content-Length': obj.size.toString(),
+    'Last-Modified': formatHttpDate(obj.last_modified),
+    'Accept-Ranges': 'bytes',
+  };
+
+  let sysMeta: Record<string, string> = {};
+  if (obj.system_metadata) {
+    try { sysMeta = JSON.parse(obj.system_metadata); } catch { /* ignore */ }
+  }
+
+  for (const [metaKey, headerName, overrideParam] of SYS_META_HEADERS) {
+    const override = query?.get(overrideParam);
+    const stored = sysMeta[metaKey];
+    if (override) {
+      h[headerName] = override;
+    } else if (stored) {
+      h[headerName] = stored;
+    }
+  }
+
+  if (!h['Cache-Control']) {
+    h['Cache-Control'] = isImageContentType(obj.content_type)
+      ? CACHE_CONTROL_IMMUTABLE
+      : CACHE_CONTROL_DEFAULT;
+  }
+
+  if (!h['Content-Disposition'] && isImageContentType(obj.content_type)) {
+    h['Content-Disposition'] = 'inline';
+    h['Access-Control-Allow-Origin'] = '*';
+  }
+
+  const mpMatch = obj.etag.match(/-(\d+)"$/);
+  if (mpMatch) {
+    h['x-amz-mp-parts-count'] = mpMatch[1];
+  }
+
+  if (obj.user_metadata) {
+    try {
+      const meta = JSON.parse(obj.user_metadata) as Record<string, string>;
+      for (const [k, v] of Object.entries(meta)) {
+        h[`x-amz-meta-${k}`] = v;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return h;
+}
+
+// RFC 7232 §4.1: 304 responses MUST include ETag, Cache-Control, Expires, Vary, Last-Modified
+// but SHOULD NOT include representation headers like Content-Type, Content-Length, Content-Encoding.
+const HEADERS_TO_STRIP_304 = ['Content-Type', 'Content-Length', 'Content-Encoding', 'Content-Language', 'Content-Disposition', 'Content-Range', 'Accept-Ranges'];
+
+export function strip304Headers(h: Record<string, string>): Record<string, string> {
+  const out = { ...h };
+  for (const name of HEADERS_TO_STRIP_304) delete out[name];
+  return out;
 }

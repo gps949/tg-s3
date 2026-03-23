@@ -1,6 +1,6 @@
 import type { Env, S3Request } from '../types';
 import { MetadataStore } from '../storage/metadata';
-import { formatHttpDate, isImageContentType, etagMatches } from '../utils/headers';
+import { etagMatches, strip304Headers, buildResponseHeaders } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
 import { parseSseCHeaders, validateKeyMd5, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError, addSseS3ResponseHeaders } from '../utils/sse';
 
@@ -44,68 +44,11 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
   }
 
   // Build base headers (shared by 200, 304, and partNumber responses)
-  const headers: Record<string, string> = {
-    'Content-Type': s3.query.get('response-content-type') || obj.content_type,
-    'Content-Length': obj.size.toString(),
-    'ETag': obj.etag,
-    'Last-Modified': formatHttpDate(obj.last_modified),
-    'Accept-Ranges': 'bytes',
-  };
-
-  // Apply stored system metadata as defaults
-  let sysMeta: Record<string, string> = {};
-  if (obj.system_metadata) {
-    try { sysMeta = JSON.parse(obj.system_metadata); } catch { /* ignore */ }
-  }
-
-  // response-* overrides take precedence over stored system metadata
-  const overrides: Array<[string, string, string]> = [
-    ['content-disposition', 'Content-Disposition', 'response-content-disposition'],
-    ['content-encoding', 'Content-Encoding', 'response-content-encoding'],
-    ['content-language', 'Content-Language', 'response-content-language'],
-    ['cache-control', 'Cache-Control', 'response-cache-control'],
-    ['expires', 'Expires', 'response-expires'],
-  ];
-  for (const [metaKey, headerName, overrideParam] of overrides) {
-    const override = s3.query.get(overrideParam);
-    const stored = sysMeta[metaKey];
-    if (override) {
-      headers[headerName] = override;
-    } else if (stored) {
-      headers[headerName] = stored;
-    }
-  }
-
-  if (!headers['Cache-Control']) {
-    headers['Cache-Control'] = isImageContentType(obj.content_type)
-      ? 'public, max-age=31536000, immutable'
-      : 'public, max-age=86400';
-  }
-
-  if (!headers['Content-Disposition'] && isImageContentType(obj.content_type)) {
-    headers['Content-Disposition'] = 'inline';
-    headers['Access-Control-Allow-Origin'] = '*';
-  }
-
-  // S3 returns x-amz-mp-parts-count for objects uploaded via multipart
-  const mpMatch = obj.etag.match(/-(\d+)"$/);
-  if (mpMatch) {
-    headers['x-amz-mp-parts-count'] = mpMatch[1];
-  }
+  const headers = buildResponseHeaders(obj, s3.query);
 
   // SSE response headers
   addSseResponseHeaders(headers, obj.system_metadata);
   addSseS3ResponseHeaders(headers, obj.system_metadata);
-
-  // Include user metadata before any return path (304, partNumber, or normal)
-  if (obj.user_metadata) {
-    try {
-      const meta = JSON.parse(obj.user_metadata) as Record<string, string>;
-      for (const [k, v] of Object.entries(meta)) {
-        headers[`x-amz-meta-${k}`] = v;
-      }
-    } catch { /* ignore */ }
-  }
 
   // Conditional: If-None-Match (304 if ETag matches)
   const ifNoneMatch = s3.headers.get('if-none-match');
@@ -148,11 +91,3 @@ export async function handleHeadObject(s3: S3Request, env: Env): Promise<Respons
   return new Response(null, { status: 200, headers });
 }
 
-// RFC 7232 §4.1: 304 responses SHOULD NOT include representation headers.
-const HEADERS_TO_STRIP_304 = ['Content-Type', 'Content-Length', 'Content-Encoding', 'Content-Language', 'Content-Disposition', 'Content-Range', 'Accept-Ranges'];
-
-function strip304Headers(h: Record<string, string>): Record<string, string> {
-  const out = { ...h };
-  for (const name of HEADERS_TO_STRIP_304) delete out[name];
-  return out;
-}

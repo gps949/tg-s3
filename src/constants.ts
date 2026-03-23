@@ -23,3 +23,7 @@ export const TG_API_TIMEOUT = 25_000; // 25s: leave 5s margin for CF Worker 30s 
 // VPS proxy
 export const VPS_PROXY_TIMEOUT = 25_000; // 25s: same margin as TG API (for streaming/API calls)
 export const VPS_LONG_TIMEOUT = 10 * 60 * 1000; // 10 min: for large file upload and consolidate (up to 2GB)
+
+// Cache-Control defaults (applied when no stored system metadata or response-* override)
+export const CACHE_CONTROL_IMMUTABLE = 'public, max-age=31536000, immutable'; // images: 1 year
+export const CACHE_CONTROL_DEFAULT = 'public, max-age=86400'; // other files: 1 day

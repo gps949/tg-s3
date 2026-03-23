@@ -120,6 +120,19 @@ Headers:
   If-None-Match: "etag" (可选, 匹配返回 304)
   If-Modified-Since: <date> (可选, 未修改返回 304)
   If-Unmodified-Since: <date> (可选, 已修改返回 412)
+
+Query Parameters:
+  partNumber=<n>           (可选, 返回多段上传对象的第 n 段, 206 响应)
+  response-content-type    (可选, 覆盖响应 Content-Type)
+  response-content-disposition (可选, 覆盖 Content-Disposition, 如强制下载)
+  response-content-encoding    (可选, 覆盖 Content-Encoding)
+  response-content-language    (可选, 覆盖 Content-Language)
+  response-cache-control       (可选, 覆盖 Cache-Control)
+  response-expires             (可选, 覆盖 Expires)
+  w=<width>    (图片专用, 缩放宽度 1-4096px, 高度按比例)
+  fmt=<format> (图片专用, 格式转换: auto/webp/jpeg/jpg/png/avif)
+  q=<quality>  (图片专用, 质量 1-100)
+  original=1   (图片专用, 跳过自动转换返回原始文件)
 ```
 
 处理流程：
@@ -137,6 +150,11 @@ Headers:
 5. 按文件大小路由下载：
    a. <=20MB: Worker 调 TG Bot API getFile → 流式返回；Range 请求在 Worker 内切片
    b. >20MB: Worker 请求 VPS → VPS 通过 Local Bot API 下载 → 流式返回（含 Range 支持）
+6. 图片变体处理（w/fmt/q 参数）：
+   - HEIC/HEIF 自动转换为浏览器兼容格式（除非传 original=1）
+   - fmt=auto 根据 Accept 头选择最优格式（AVIF > WebP > JPEG）
+   - 变体缓存到 D1 + TG，后续请求直接返回
+   - 加密对象不支持图片变体
 
 响应：
 ```

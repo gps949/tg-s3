@@ -15,7 +15,7 @@ This document records the compatibility status and deliberate design decisions.
 | GetBucketVersioning | Stub | Always returns disabled |
 | ListObjects (V1) | Full | Supports prefix, delimiter, marker, encoding-type |
 | ListObjectsV2 | Full | Opaque base64 continuation tokens |
-| GetObject | Full | Conditional headers, Range, partNumber, response-* overrides |
+| GetObject | Full | Conditional headers, Range, partNumber, response-* overrides, image variants (w, fmt, q) |
 | PutObject | Full | Content-MD5, x-amz-content-sha256 verification, 0-byte support |
 | HeadObject | Full | Same headers as GetObject, partNumber support |
 | DeleteObject | Full | Returns 204 even if key doesn't exist |

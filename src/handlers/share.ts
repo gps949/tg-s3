@@ -4,7 +4,7 @@ import { createShareToken, validateShareToken, validateShareTokenWithCookie } fr
 import { renderSharePage, renderPasswordPage, renderExpiredPage } from '../sharing/pages';
 import { downloadFromTelegram } from '../telegram/download';
 import { errorResponse } from '../xml/builder';
-import { BOT_API_GETFILE_LIMIT } from '../constants';
+import { BOT_API_GETFILE_LIMIT, CACHE_CONTROL_DEFAULT } from '../constants';
 import { parseRange } from '../utils/headers';
 import { detectLang } from '../i18n';
 import { signShareSession, timingSafeEqual } from '../utils/crypto';
@@ -278,7 +278,7 @@ async function serveFile(obj: ObjectRow, env: Env, disposition: 'inline' | 'atta
     'Accept-Ranges': 'bytes',
   };
   if (disposition === 'inline') {
-    baseHeaders['Cache-Control'] = 'public, max-age=86400';
+    baseHeaders['Cache-Control'] = CACHE_CONTROL_DEFAULT;
   }
 
   const rangeHeader = request?.headers.get('range') || null;

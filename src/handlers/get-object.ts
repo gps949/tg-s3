@@ -3,9 +3,9 @@ import { MetadataStore } from '../storage/metadata';
 import { downloadFromTelegram } from '../telegram/download';
 import { uploadToTelegram } from '../telegram/upload';
 import { computeEtag } from '../utils/crypto';
-import { parseRange, formatHttpDate, isImageContentType, etagMatches } from '../utils/headers';
+import { parseRange, isImageContentType, etagMatches, strip304Headers, buildResponseHeaders } from '../utils/headers';
 import { errorResponse } from '../xml/builder';
-import { BOT_API_GETFILE_LIMIT, R2_CACHE_MIN_SIZE, R2_CACHE_MAX_SIZE } from '../constants';
+import { BOT_API_GETFILE_LIMIT, R2_CACHE_MIN_SIZE, R2_CACHE_MAX_SIZE, CACHE_CONTROL_IMMUTABLE } from '../constants';
 import { VpsClient } from '../media/vps-client';
 import { parseSseCHeaders, validateKeyMd5, decrypt, isEncrypted, getStoredKeyMd5, addSseResponseHeaders, SseCError, isEncryptedS3, decryptS3, addSseS3ResponseHeaders } from '../utils/sse';
 
@@ -453,82 +453,6 @@ async function downloadViaVps(
   }
 }
 
-// Header name mapping: system_metadata key → HTTP header, response-* override key
-const SYS_META_HEADERS: Array<[string, string, string]> = [
-  ['content-disposition', 'Content-Disposition', 'response-content-disposition'],
-  ['content-encoding', 'Content-Encoding', 'response-content-encoding'],
-  ['content-language', 'Content-Language', 'response-content-language'],
-  ['cache-control', 'Cache-Control', 'response-cache-control'],
-  ['expires', 'Expires', 'response-expires'],
-];
-
-function buildResponseHeaders(obj: ObjectRow, query?: URLSearchParams): Record<string, string> {
-  const h: Record<string, string> = {
-    'ETag': obj.etag,
-    'Content-Type': query?.get('response-content-type') || obj.content_type,
-    'Content-Length': obj.size.toString(),
-    'Last-Modified': formatHttpDate(obj.last_modified),
-    'Accept-Ranges': 'bytes',
-  };
-
-  // Apply stored system metadata as defaults
-  let sysMeta: Record<string, string> = {};
-  if (obj.system_metadata) {
-    try { sysMeta = JSON.parse(obj.system_metadata); } catch { /* ignore */ }
-  }
-
-  // S3 response-* query parameters override stored system metadata
-  for (const [metaKey, headerName, overrideParam] of SYS_META_HEADERS) {
-    const override = query?.get(overrideParam);
-    const stored = sysMeta[metaKey];
-    if (override) {
-      h[headerName] = override;
-    } else if (stored) {
-      h[headerName] = stored;
-    }
-  }
-
-  // Default Cache-Control if not set by stored metadata or override
-  if (!h['Cache-Control']) {
-    h['Cache-Control'] = isImageContentType(obj.content_type)
-      ? 'public, max-age=31536000, immutable'
-      : 'public, max-age=86400';
-  }
-
-  if (!h['Content-Disposition'] && isImageContentType(obj.content_type)) {
-    h['Content-Disposition'] = 'inline';
-    h['Access-Control-Allow-Origin'] = '*';
-  }
-
-  // S3 returns x-amz-mp-parts-count for objects uploaded via multipart
-  const mpMatch = obj.etag.match(/-(\d+)"$/);
-  if (mpMatch) {
-    h['x-amz-mp-parts-count'] = mpMatch[1];
-  }
-
-  if (obj.user_metadata) {
-    try {
-      const meta = JSON.parse(obj.user_metadata) as Record<string, string>;
-      for (const [k, v] of Object.entries(meta)) {
-        h[`x-amz-meta-${k}`] = v;
-      }
-    } catch { /* ignore */ }
-  }
-
-  return h;
-}
-
-// RFC 7232 §4.1: 304 responses MUST include ETag, Cache-Control, Expires, Vary, Last-Modified
-// but SHOULD NOT include representation headers like Content-Type, Content-Length, Content-Encoding.
-// AWS S3 304 responses omit these headers.
-const HEADERS_TO_STRIP_304 = ['Content-Type', 'Content-Length', 'Content-Encoding', 'Content-Language', 'Content-Disposition', 'Content-Range', 'Accept-Ranges'];
-
-function strip304Headers(h: Record<string, string>): Record<string, string> {
-  const out = { ...h };
-  for (const name of HEADERS_TO_STRIP_304) delete out[name];
-  return out;
-}
-
 async function handleImageVariant(
   s3: S3Request, obj: ObjectRow,
   env: Env, store: MetadataStore, bucket: BucketRow,
@@ -541,7 +465,7 @@ async function handleImageVariant(
   const variantHeaders = (ct: string, size?: number): Record<string, string> => {
     const h: Record<string, string> = {
       'Content-Type': ct,
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Cache-Control': CACHE_CONTROL_IMMUTABLE,
       'Access-Control-Allow-Origin': '*',
     };
     if (size !== undefined) h['Content-Length'] = size.toString();
