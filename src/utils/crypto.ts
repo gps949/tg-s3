@@ -91,9 +91,12 @@ export function bufToHex(buf: ArrayBuffer): string {
 }
 
 export function hexToBuf(hex: string): ArrayBuffer {
+  if (hex.length % 2 !== 0) return new ArrayBuffer(0);
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    const v = parseInt(hex.substring(i, i + 2), 16);
+    if (Number.isNaN(v)) return new ArrayBuffer(0);
+    bytes[i / 2] = v;
   }
   return bytes.buffer as ArrayBuffer;
 }

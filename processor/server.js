@@ -317,7 +317,10 @@ async function streamEncryptFile(inputPath, outputPath, keyBase64) {
     cipher.on('error', reject);
     ws.write(iv); // IV header
     rs.pipe(cipher);
-    cipher.on('data', chunk => ws.write(chunk));
+    cipher.on('data', chunk => {
+      const ok = ws.write(chunk);
+      if (!ok) { cipher.pause(); ws.once('drain', () => cipher.resume()); }
+    });
     cipher.on('end', () => {
       ws.write(cipher.getAuthTag()); // 16-byte auth tag
       ws.end(resolve);
