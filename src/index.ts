@@ -219,8 +219,8 @@ export default {
       }
       return addCorsHeaders(response);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Unknown error';
-      const errRes = errorResponse(500, 'InternalError', msg);
+      console.error('Unhandled error:', e instanceof Error ? e.message : e);
+      const errRes = errorResponse(500, 'InternalError', 'An internal error occurred.');
       if (request.method === 'HEAD') {
         return addCorsHeaders(new Response(null, { status: errRes.status, headers: errRes.headers }));
       }

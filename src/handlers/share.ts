@@ -159,7 +159,7 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
       const cookieName = `sp_${token.slice(0, 16)}`;
       const cookies = request.headers.get('cookie') || '';
       const cookieMap = Object.fromEntries(
-        cookies.split(';').map(c => c.trim().split('=').map(s => s.trim())).filter(p => p.length === 2)
+        cookies.split(';').map(c => { const i = c.indexOf('='); return i < 0 ? [] : [c.slice(0, i).trim(), c.slice(i + 1).trim()]; }).filter(p => p.length === 2)
       );
       const expectedCookie = await signShareSession(env.TG_BOT_TOKEN, token);
       if (!cookieMap[cookieName] || !timingSafeEqual(cookieMap[cookieName], expectedCookie)) {
@@ -191,7 +191,7 @@ export async function handleShareAccess(request: Request, url: URL, env: Env): P
     const cookieName = `sp_${token.slice(0, 16)}`;
     const cookies = request.headers.get('cookie') || '';
     const cookieMap = Object.fromEntries(
-      cookies.split(';').map(c => c.trim().split('=').map(s => s.trim())).filter(p => p.length === 2)
+      cookies.split(';').map(c => { const i = c.indexOf('='); return i < 0 ? [] : [c.slice(0, i).trim(), c.slice(i + 1).trim()]; }).filter(p => p.length === 2)
     );
     const cookieValue = cookieMap[cookieName];
     if (cookieValue) {

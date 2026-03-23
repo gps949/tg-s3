@@ -29,17 +29,21 @@ for (const [name, value] of Object.entries(REQUIRED_ENV)) {
 
 if (!existsSync(TEMP_DIR)) mkdirSync(TEMP_DIR, { recursive: true });
 
-// Auth middleware
+// Auth middleware (timing-safe comparison to prevent secret extraction via timing oracle)
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;
-  if (!auth || auth !== `Bearer ${AUTH_SECRET}`) {
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  const expected = `Bearer ${AUTH_SECRET}`;
+  if (auth.length !== expected.length ||
+      !require('crypto').timingSafeEqual(Buffer.from(auth), Buffer.from(expected))) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 }
 
-app.use(express.json({ limit: '50mb' }));
+// Auth BEFORE body parsing to prevent unauthenticated 50MB JSON DoS
 app.use(authMiddleware);
+app.use(express.json({ limit: '50mb' }));
 
 // --- Job queue (in-memory) ---
 const jobs = new Map();
@@ -384,7 +388,7 @@ app.post('/api/proxy/get-decrypt', async (req, res) => {
     if (range_start !== undefined && range_end !== undefined) {
       const start = parseInt(range_start, 10);
       const end = Math.min(parseInt(range_end, 10), decSize - 1);
-      if (start > end || start >= decSize) {
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || start >= decSize) {
         return res.status(416).json({ error: 'Range not satisfiable' });
       }
       res.set('Content-Range', `bytes ${start}-${end}/${decSize}`);
@@ -415,6 +419,9 @@ app.post('/api/proxy/consolidate', async (req, res) => {
     const { file_ids, chat_id, filename, content_type, message_thread_id, sse_key, sse_s3_key } = req.body;
     if (!file_ids || !Array.isArray(file_ids) || !chat_id) {
       return res.status(400).json({ error: 'Missing file_ids or chat_id' });
+    }
+    if (file_ids.length > 10000) {
+      return res.status(400).json({ error: 'file_ids exceeds maximum of 10000 parts' });
     }
 
     // Download all parts and stream to temp file
@@ -663,7 +670,8 @@ async function uploadDerivative(job, derivativeName, buffer, contentType) {
   }
 
   const data = await tgRes.json();
-  const doc = data.result.document;
+  const doc = data.result?.document;
+  if (!doc) throw new Error(`TG response missing document field for ${derivativeName}`);
 
   return {
     key,
@@ -683,7 +691,7 @@ async function getFilePath(fileId) {
   });
   if (!res.ok) throw new Error(`getFile failed: ${res.status}`);
   const data = await res.json();
-  if (!data.ok || !data.result.file_path) throw new Error('No file_path in getFile response');
+  if (!data.ok || !data.result?.file_path) throw new Error('No file_path in getFile response');
   return data.result.file_path;
 }
 

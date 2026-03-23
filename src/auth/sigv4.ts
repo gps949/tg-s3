@@ -117,7 +117,7 @@ async function verifyQueryStringAuth(request: Request, url: URL, resolve: Creden
   const providedSig = url.searchParams.get('X-Amz-Signature') || '';
 
   // S3 rejects presigned URLs with expiry > 7 days (604800 seconds)
-  if (expires <= 0 || expires > 604800) {
+  if (!Number.isFinite(expires) || expires <= 0 || expires > 604800) {
     return { status: 400, code: 'AuthorizationQueryParametersError', message: 'X-Amz-Expires must be between 1 and 604800 seconds.' };
   }
 

@@ -1,3 +1,6 @@
+import type { ObjectRow } from '../types';
+import { CACHE_CONTROL_IMMUTABLE, CACHE_CONTROL_DEFAULT } from '../constants';
+
 // Returns { start, end } for valid range, 'unsatisfiable' for valid syntax but
 // out-of-bounds range (→ 416), or null for missing/malformed header (→ ignore).
 export function parseRange(header: string | null, totalSize: number): { start: number; end: number } | 'unsatisfiable' | null {
@@ -54,9 +57,6 @@ export function formatAmzDate(d: Date): string {
 export function formatAmzDateShort(d: Date): string {
   return formatAmzDate(d).slice(0, 8);
 }
-
-import type { ObjectRow } from '../types';
-import { CACHE_CONTROL_IMMUTABLE, CACHE_CONTROL_DEFAULT } from '../constants';
 
 export function isImageContentType(ct: string): boolean {
   return ct.startsWith('image/');
