@@ -93,6 +93,7 @@ Share links support:
 - `/share/<token>` -- Preview page with metadata
 - `/share/<token>/download` -- Direct download
 - `/share/<token>/inline` -- Inline display (images, videos)
+- `/share/<token>/live-video` -- Live Photo video component (Apple Live Photos)
 
 ### /shares
 
