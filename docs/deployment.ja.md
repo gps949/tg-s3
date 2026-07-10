@@ -76,19 +76,22 @@ CF_CUSTOM_DOMAIN=s3.example.com
 
 Cloudflare Tunnel はプロセッサと CF Worker 間に安全な接続を確立し、ポートの公開が不要になります。
 
+> **注意：** 2GB の大容量ファイル対応には、Local Bot API（`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`）**と** Worker から到達可能なプロセッサ（`VPS_URL`、通常はこのトンネル経由）の**両方**が必要です。`TELEGRAM_API_ID`/`TELEGRAM_API_HASH` のみの設定では不十分で、20MB を超えるファイルは失敗します。
+
 **自動設定**（`.env` に `CF_CUSTOM_DOMAIN` が必要）：
 
-`deploy.sh` がトンネルを自動作成し DNS を設定します。トンネルのホスト名は `vps.<カスタムドメイン>` になります。`./deploy.sh` を実行するだけで、`CF_CUSTOM_DOMAIN` が設定されていればトンネルは自動的に構成されます。
+`deploy.sh` がトンネルを自動作成し DNS を設定します。トンネルのホスト名は `vps.<カスタムドメイン>` になり、`VPS_URL` は自動的に設定されます（`.env` に書き込まれ、Worker secret としてプッシュされます）。`./deploy.sh` を実行するだけで、`CF_CUSTOM_DOMAIN` が設定されていればトンネルは自動的に構成されます。
 
 **手動設定**（カスタムドメインなし）：
 
 1. CF Dashboard > Zero Trust > Networks > Tunnels に移動
 2. `tg-s3` という名前のトンネルを作成
 3. `http://processor:3000` を指すパブリックホスト名を追加
-4. トンネルトークンを `.env` にコピー：
+4. トンネルトークン**と**手順 3 のパブリックホスト名を `.env` にコピー：
 
 ```bash
 CF_TUNNEL_TOKEN=eyJhIjo...
+VPS_URL=https://vps.example.com   # 手順 3 で設定したパブリックホスト名
 ```
 
 5. デプロイを実行：
@@ -97,7 +100,7 @@ CF_TUNNEL_TOKEN=eyJhIjo...
 ./deploy.sh
 ```
 
-トンネルは `VPS_URL` の代わりとなり、Worker は直接接続ではなく Cloudflare ネットワーク経由でプロセッサにアクセスします。
+Worker は直接接続ではなく Cloudflare ネットワーク経由でプロセッサにアクセスしますが、トンネルの公開ホスト名を知るために `VPS_URL`（`deploy.sh` が Worker secret としてプッシュ）が依然として必要です。手動設定の場合は `VPS_URL` を自分で設定しないと、20MB を超えるファイルは失敗します。
 
 ### アップデート
 

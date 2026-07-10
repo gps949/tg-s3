@@ -76,19 +76,22 @@ Apres le deploiement, creez des identifiants S3 dans le Mini App Telegram (ongle
 
 Cloudflare Tunnel cree une connexion securisee entre le processeur et les CF Workers sans exposer de ports publics.
 
+> **Note :** le support des gros fichiers (2 Go) necessite **a la fois** le Local Bot API (`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`) **et** un processeur accessible par le Worker (`VPS_URL`, generalement via ce tunnel). Definir uniquement `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` ne suffit pas -- les fichiers de plus de 20 Mo echoueront quand meme.
+
 **Configuration automatique** (necessite `CF_CUSTOM_DOMAIN` dans `.env`) :
 
-`deploy.sh` cree automatiquement un tunnel et configure le DNS. Le nom d'hote du tunnel sera `vps.<votre-domaine>`. Lancez simplement `./deploy.sh` -- la configuration du tunnel est geree automatiquement lorsque `CF_CUSTOM_DOMAIN` est defini.
+`deploy.sh` cree automatiquement un tunnel et configure le DNS. Le nom d'hote du tunnel sera `vps.<votre-domaine>`, et `VPS_URL` est defini pour vous (dans `.env` et comme secret du Worker). Lancez simplement `./deploy.sh` -- la configuration du tunnel est geree automatiquement lorsque `CF_CUSTOM_DOMAIN` est defini.
 
 **Configuration manuelle** (sans domaine personnalise) :
 
 1. Allez dans CF Dashboard > Zero Trust > Networks > Tunnels
 2. Creez un tunnel nomme `tg-s3`
 3. Ajoutez un nom d'hote public pointant vers `http://processor:3000`
-4. Copiez le token du tunnel dans `.env` :
+4. Copiez le token du tunnel **et** le nom d'hote public de l'etape 3 dans `.env` :
 
 ```bash
 CF_TUNNEL_TOKEN=eyJhIjo...
+VPS_URL=https://vps.example.com   # nom d'hote public configure a l'etape 3
 ```
 
 5. Lancez le deploiement :
@@ -97,7 +100,7 @@ CF_TUNNEL_TOKEN=eyJhIjo...
 ./deploy.sh
 ```
 
-Le tunnel remplace `VPS_URL` -- le Worker atteint le processeur via le reseau Cloudflare au lieu d'une connexion directe.
+Le Worker atteint le processeur via le reseau Cloudflare au lieu d'une connexion directe, mais il a toujours besoin de `VPS_URL` (pousse comme secret du Worker par `deploy.sh`) pour connaitre le nom d'hote public du tunnel. En configuration manuelle, vous devez definir `VPS_URL` vous-meme, sinon les fichiers de plus de 20 Mo echoueront.
 
 ### Mise a jour
 

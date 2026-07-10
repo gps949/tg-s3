@@ -76,19 +76,22 @@ CF_CUSTOM_DOMAIN=s3.example.com
 
 Cloudflare Tunnel 在 processor 和 CF Worker 之间建立安全连接，无需暴露公网端口。
 
+> **注意：** 2GB 大文件支持需要**同时**满足两个条件：Local Bot API（`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`）**和** Worker 可访问的 processor（`VPS_URL`，通常通过此 tunnel 提供）。只设置 `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` 是不够的——超过 20MB 的文件仍会失败。
+
 **自动配置**（需要在 `.env` 中设置 `CF_CUSTOM_DOMAIN`）：
 
-`deploy.sh` 会自动创建 tunnel 并配置 DNS。tunnel 域名为 `vps.<你的自定义域名>`。只需运行 `./deploy.sh`，设置了 `CF_CUSTOM_DOMAIN` 后 tunnel 会自动配置。
+`deploy.sh` 会自动创建 tunnel 并配置 DNS。tunnel 域名为 `vps.<你的自定义域名>`，`VPS_URL` 会自动设置（写入 `.env` 并推送为 Worker secret）。只需运行 `./deploy.sh`，设置了 `CF_CUSTOM_DOMAIN` 后 tunnel 会自动配置。
 
 **手动配置**（无自定义域名时）：
 
 1. 进入 CF Dashboard > Zero Trust > Networks > Tunnels
 2. 创建名为 `tg-s3` 的 tunnel
 3. 添加公共主机名，指向 `http://processor:3000`
-4. 将 tunnel token 复制到 `.env`：
+4. 将 tunnel token **和**第 3 步的公共主机名复制到 `.env`：
 
 ```bash
 CF_TUNNEL_TOKEN=eyJhIjo...
+VPS_URL=https://vps.example.com   # 第 3 步配置的公共主机名
 ```
 
 5. 启动部署：
@@ -97,7 +100,7 @@ CF_TUNNEL_TOKEN=eyJhIjo...
 ./deploy.sh
 ```
 
-Tunnel 替代了 `VPS_URL`，Worker 通过 Cloudflare 网络访问 processor，而非直接连接。
+Worker 通过 Cloudflare 网络访问 processor（而非直接连接），但它仍然需要 `VPS_URL`（由 `deploy.sh` 推送为 Worker secret）来获知 tunnel 的公网地址。手动配置时必须自行设置 `VPS_URL`，否则超过 20MB 的文件会失败。
 
 ### 更新
 

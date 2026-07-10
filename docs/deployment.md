@@ -76,19 +76,22 @@ After deployment, create S3 credentials in the Telegram Mini App (Keys tab) to c
 
 Cloudflare Tunnel creates a secure connection between the processor and CF Workers without exposing ports publicly.
 
+> **Note:** 2GB large-file support requires **both** the Local Bot API (`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`) **and** a Worker-reachable processor (`VPS_URL`, typically via this tunnel). Setting only `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` is not enough -- files larger than 20MB will still fail.
+
 **Automatic setup** (requires `CF_CUSTOM_DOMAIN` in `.env`):
 
-`deploy.sh` auto-creates a tunnel and configures DNS. The tunnel hostname will be `vps.<your-custom-domain>`. Just run `./deploy.sh` -- tunnel setup is handled automatically when `CF_CUSTOM_DOMAIN` is set.
+`deploy.sh` auto-creates a tunnel and configures DNS. The tunnel hostname will be `vps.<your-custom-domain>`, and `VPS_URL` is set for you (in `.env` and as a Worker secret). Just run `./deploy.sh` -- tunnel setup is handled automatically when `CF_CUSTOM_DOMAIN` is set.
 
 **Manual setup** (without custom domain):
 
 1. Go to CF Dashboard > Zero Trust > Networks > Tunnels
 2. Create a tunnel named `tg-s3`
 3. Add a public hostname pointing to `http://processor:3000`
-4. Copy the tunnel token to `.env`:
+4. Copy the tunnel token **and** the public hostname from step 3 to `.env`:
 
 ```bash
 CF_TUNNEL_TOKEN=eyJhIjo...
+VPS_URL=https://vps.example.com   # public hostname configured in step 3
 ```
 
 5. Start with tunnel profile:
@@ -97,7 +100,7 @@ CF_TUNNEL_TOKEN=eyJhIjo...
 ./deploy.sh
 ```
 
-The tunnel replaces `VPS_URL` -- the Worker reaches the processor through Cloudflare's network instead of a direct connection.
+The Worker reaches the processor through Cloudflare's network instead of a direct connection, but it still needs `VPS_URL` (pushed as a Worker secret by `deploy.sh`) to know the tunnel's public hostname. With manual setup you must set `VPS_URL` yourself, otherwise files larger than 20MB will fail.
 
 ### Updating
 

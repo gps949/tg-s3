@@ -50,10 +50,12 @@ API トークン権限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Sett
 | `VPS_SSH` | VPS デプロイ用の SSH 接続文字列 | -- |
 | `VPS_DEPLOY_DIR` | VPS 上のデプロイディレクトリ | `/opt/tg-s3` |
 | `VPS_PORT` | プロセッササービスのポート | `3000` |
-| `VPS_URL` | VPS プロセッサの公開 URL（トンネル使用時は自動設定） | -- |
+| `VPS_URL` | VPS プロセッサの公開 URL（トンネル自動作成時は自動設定。`CF_TUNNEL_TOKEN` を手動で指定した場合は手動設定が必要） | -- |
 | `VPS_SECRET` | Worker とプロセッサ間の認証シークレット（自動生成） | -- |
-| `TELEGRAM_API_ID` | Local Bot API 用の Telegram API ID（取得方法は下記参照）。2GB ファイルサポートを有効化。 | -- |
+| `TELEGRAM_API_ID` | Local Bot API 用の Telegram API ID（取得方法は下記参照） | -- |
 | `TELEGRAM_API_HASH` | Local Bot API 用の Telegram API Hash（取得方法は下記参照） | -- |
+
+> **2GB ファイルサポート**には、Local Bot API（`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`）**と** `VPS_URL`（Worker がプロセッサに到達できること、通常は Cloudflare Tunnel 経由）の**両方**が必要です。`TELEGRAM_API_ID`/`TELEGRAM_API_HASH` のみの場合、20MB の制限が引き続き適用されます。
 
 **TELEGRAM_API_ID と TELEGRAM_API_HASH の取得方法：**
 

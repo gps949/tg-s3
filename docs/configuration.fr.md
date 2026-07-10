@@ -50,10 +50,12 @@ Permissions du token API : Workers Scripts:Edit, D1:Edit, R2:Edit, Account Setti
 | `VPS_SSH` | Chaîne de connexion SSH pour le déploiement VPS | -- |
 | `VPS_DEPLOY_DIR` | Répertoire de déploiement sur le VPS | `/opt/tg-s3` |
 | `VPS_PORT` | Port du service processeur | `3000` |
-| `VPS_URL` | URL publique du processeur VPS (définie automatiquement avec le tunnel) | -- |
+| `VPS_URL` | URL publique du processeur VPS (définie automatiquement lors de la création automatique du tunnel ; doit être définie manuellement si `CF_TUNNEL_TOKEN` est fourni manuellement) | -- |
 | `VPS_SECRET` | Secret d'authentification entre le Worker et le processeur (généré automatiquement) | -- |
-| `TELEGRAM_API_ID` | ID API Telegram pour l'API Bot locale (voir ci-dessous). Active le support de fichiers 2 Go. | -- |
+| `TELEGRAM_API_ID` | ID API Telegram pour l'API Bot locale (voir ci-dessous) | -- |
 | `TELEGRAM_API_HASH` | Hash API Telegram pour l'API Bot locale (voir ci-dessous) | -- |
+
+> **Le support de fichiers 2 Go** nécessite **à la fois** le Local Bot API (`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`) **et** `VPS_URL` (le Worker doit pouvoir atteindre le processeur, généralement via Cloudflare Tunnel). Avec uniquement `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`, la limite de 20 Mo s'applique toujours.
 
 **Obtenir TELEGRAM_API_ID et TELEGRAM_API_HASH :**
 

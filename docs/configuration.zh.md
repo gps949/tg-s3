@@ -50,10 +50,12 @@ API token 权限：Workers Scripts:Edit、D1:Edit、R2:Edit、Account Settings:R
 | `VPS_SSH` | VPS 部署的 SSH 连接字符串 | -- |
 | `VPS_DEPLOY_DIR` | VPS 上的部署目录 | `/opt/tg-s3` |
 | `VPS_PORT` | Processor 服务端口 | `3000` |
-| `VPS_URL` | VPS processor 的公网 URL（使用 tunnel 时自动设置） | -- |
+| `VPS_URL` | VPS processor 的公网 URL（tunnel 自动创建时自动设置；手动提供 `CF_TUNNEL_TOKEN` 时必须手动设置） | -- |
 | `VPS_SECRET` | Worker 与 processor 之间的认证密钥（自动生成） | -- |
-| `TELEGRAM_API_ID` | Telegram API ID，用于 Local Bot API（获取方式见下方），启用 2GB 文件支持 | -- |
+| `TELEGRAM_API_ID` | Telegram API ID，用于 Local Bot API（获取方式见下方） | -- |
 | `TELEGRAM_API_HASH` | Telegram API Hash，用于 Local Bot API（获取方式见下方） | -- |
+
+> **2GB 大文件支持**需要**同时**满足：Local Bot API（`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`）**和** `VPS_URL`（Worker 必须能访问 processor，通常通过 Cloudflare Tunnel）。只设置 `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` 时，20MB 限制仍然生效。
 
 **获取 TELEGRAM_API_ID 和 TELEGRAM_API_HASH：**
 

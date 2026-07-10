@@ -11,6 +11,8 @@ services:
     environment:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-${CF_ACCOUNT_ID:-}}
+      # 部署脚本输出语言, 由宿主机 deploy.sh 检测后透传 / deploy script output language, passed through from the host
+      - TGS3_LANG=${TGS3_LANG:-}
     restart: "no"
     profiles:
       - deploy
